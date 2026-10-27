@@ -1,0 +1,25 @@
+--- a/kernel/common/inc/nv-mm.h
++++ b/kernel/common/inc/nv-mm.h
+@@ -145,7 +145,11 @@
+                                 struct page **pages,
+                                 struct vm_area_struct **vmas)
+ {
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 5, 0)
++    (void)vmas;
++    return pin_user_pages(start, nr_pages, gup_flags, pages);
++#else
+     return pin_user_pages(start, nr_pages, gup_flags, pages, vmas);
++#endif
+ }
+ 
+@@ -188,7 +192,11 @@
+                                        struct vm_area_struct **vmas,
+                                        int *locked)
+ {
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 5, 0)
++    (void)vmas;
++    return get_user_pages_remote(mm, start, nr_pages, gup_flags, pages, locked);
++#else
+     return get_user_pages_remote(mm, start, nr_pages, gup_flags, pages, vmas, locked);
++#endif
+ }
