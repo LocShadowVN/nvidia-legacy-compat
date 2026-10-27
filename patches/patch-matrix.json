@@ -1,0 +1,91 @@
+{
+  "schema_version": "1.0.0",
+  "drivers": {
+    "470.256.02": {
+      "architecture": "x86_64",
+      "dkms_module_name": "nvidia",
+      "supported_kernels": {
+        "min": "6.0.0",
+        "max": "6.19.99"
+      },
+      "patches": [
+        {
+          "id": "NV470-K63-VMFLAGS",
+          "file": "470.256.02/0001-kernel-6.3-vm-flags.patch",
+          "min_kernel": "6.3.0",
+          "max_kernel": "6.99.99",
+          "description": "Replace direct vma->vm_flags mutations with vm_flags_set/vm_flags_clear",
+          "required": true
+        },
+        {
+          "id": "NV470-K65-GUP",
+          "file": "470.256.02/0002-kernel-6.5-gup-signature.patch",
+          "min_kernel": "6.5.0",
+          "max_kernel": "6.99.99",
+          "description": "Remove vmas parameter from get_user_pages and pin_user_pages",
+          "required": true
+        },
+        {
+          "id": "NV470-K610-FOLLOWPFN-DRM",
+          "file": "470.256.02/0003-kernel-6.10-follow-pfn-drm.patch",
+          "min_kernel": "6.8.0",
+          "max_kernel": "6.99.99",
+          "description": "Replace follow_pfn with follow_pte/follow_pfnmap and enable DRM PRIME handle-to-fd export",
+          "required": true
+        }
+      ]
+    },
+    "390.157": {
+      "architecture": "x86_64",
+      "dkms_module_name": "nvidia",
+      "supported_kernels": {
+        "min": "6.0.0",
+        "max": "6.19.99"
+      },
+      "patches": [
+        {
+          "id": "NV390-K63-VMFLAGS",
+          "file": "470.256.02/0001-kernel-6.3-vm-flags.patch",
+          "min_kernel": "6.3.0",
+          "max_kernel": "6.99.99",
+          "description": "Backport vm_flags_set/vm_flags_clear wrapper to 390.xx branch",
+          "required": true
+        },
+        {
+          "id": "NV390-K65-GUP",
+          "file": "470.256.02/0002-kernel-6.5-gup-signature.patch",
+          "min_kernel": "6.5.0",
+          "max_kernel": "6.99.99",
+          "description": "Backport 4-arg pin_user_pages/get_user_pages to 390.xx branch",
+          "required": true
+        },
+        {
+          "id": "NV390-K610-FOLLOWPFN-DRM",
+          "file": "470.256.02/0003-kernel-6.10-follow-pfn-drm.patch",
+          "min_kernel": "6.8.0",
+          "max_kernel": "6.99.99",
+          "description": "Replace follow_pfn and unlock DRM PRIME export on 390.xx",
+          "required": true
+        }
+      ]
+    },
+    "340.108": {
+      "architecture": "x86_64",
+      "dkms_module_name": "nvidia",
+      "supported_kernels": {
+        "min": "6.0.0",
+        "max": "6.12.99"
+      },
+      "patches": [
+        {
+          "id": "NV340-K63-VMFLAGS",
+          "file": "470.256.02/0001-kernel-6.3-vm-flags.patch",
+          "min_kernel": "6.3.0",
+          "max_kernel": "6.12.99",
+          "description": "Apply vm_flags_set compatibility wrapper for Tesla/DX10 legacy branch",
+          "required": true
+        }
+      ]
+    }
+  }
+}
