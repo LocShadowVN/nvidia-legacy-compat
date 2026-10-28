@@ -1,6 +1,6 @@
 --- a/kernel/common/inc/nv-mm.h
 +++ b/kernel/common/inc/nv-mm.h
-@@ -145,7 +145,11 @@
+@@ -1,10 +1,20 @@
                                  struct page **pages,
                                  struct vm_area_struct **vmas)
  {
@@ -11,8 +11,6 @@
      return pin_user_pages(start, nr_pages, gup_flags, pages, vmas);
 +#endif
  }
- 
-@@ -188,7 +192,11 @@
                                         struct vm_area_struct **vmas,
                                         int *locked)
  {
