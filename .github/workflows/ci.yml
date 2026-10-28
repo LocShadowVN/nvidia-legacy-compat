@@ -1,0 +1,65 @@
+name: nvidia-legacy-compat CI
+
+on:
+  push:
+    branches: ["main", "master"]
+  pull_request:
+
+jobs:
+  verify-patches-and-scripts:
+    name: Patch Matrix & Bash Pipeline Verification
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install tools (jq, shellcheck, patch)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq shellcheck patch
+
+      - name: Lint Bash scripts with ShellCheck
+        run: |
+          shellcheck scripts/auto-patch.sh tests/test_auto_patch.sh
+
+      - name: Validate patch-matrix.json syntax & referenced files
+        run: |
+          jq empty patches/patch-matrix.json
+          for f in $(jq -r '.drivers[].patches[].file' patches/patch-matrix.json | sort -u); do
+            test -f "patches/${f}" || (echo "Missing patch file: patches/${f}" && exit 1)
+          done
+
+      - name: Execute automated patch & semver test suite
+        run: |
+          chmod +x scripts/auto-patch.sh tests/test_auto_patch.sh
+          ./tests/test_auto_patch.sh
+
+  build-and-test-gbm-shim:
+    name: Rust Wayland GBM Shim (libgbm.so) Build & Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Check formatting & Clippy lints
+        working-directory: gbm-shim
+        run: |
+          cargo fmt --check
+          cargo clippy --all-targets -- -D warnings
+
+      - name: Run GBM C-ABI & Fence Sync Unit Tests
+        working-directory: gbm-shim
+        run: |
+          cargo test -- --nocapture
+
+      - name: Build production shared library (libgbm.so.1) with version script
+        working-directory: gbm-shim
+        run: |
+          RUSTFLAGS="-C link-arg=-Wl,--version-script=$(pwd)/linker.lds -C link-arg=-Wl,-soname,libgbm.so.1" \
+            cargo build --release
+          nm -D --with-symbol-versions target/release/libgbm.so | grep "GBM_1.0"
