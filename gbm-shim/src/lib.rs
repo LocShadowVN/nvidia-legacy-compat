@@ -888,10 +888,7 @@ pub unsafe extern "C" fn gbm_surface_lock_front_buffer(surface: *mut gbm_surface
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn gbm_surface_release_buffer(
-    surface: *mut gbm_surface,
-    bo: *mut gbm_bo,
-) {
+pub unsafe extern "C" fn gbm_surface_release_buffer(surface: *mut gbm_surface, bo: *mut gbm_bo) {
     if surface.is_null() || bo.is_null() {
         return;
     }

@@ -31,10 +31,8 @@ pub struct DmaBufImportSyncFile {
 }
 
 pub const DMA_BUF_IOCTL_SYNC: c_ulong = iow::<DmaBufSync>(DMA_BUF_BASE, 0);
-pub const DMA_BUF_IOCTL_EXPORT_SYNC_FILE: c_ulong =
-    iowr::<DmaBufExportSyncFile>(DMA_BUF_BASE, 2);
-pub const DMA_BUF_IOCTL_IMPORT_SYNC_FILE: c_ulong =
-    iow::<DmaBufImportSyncFile>(DMA_BUF_BASE, 3);
+pub const DMA_BUF_IOCTL_EXPORT_SYNC_FILE: c_ulong = iowr::<DmaBufExportSyncFile>(DMA_BUF_BASE, 2);
+pub const DMA_BUF_IOCTL_IMPORT_SYNC_FILE: c_ulong = iow::<DmaBufImportSyncFile>(DMA_BUF_BASE, 3);
 
 /// Bộ quản lý hàng rào đồng bộ (Fence Synchronization Manager) cho DMA-BUF
 pub struct FenceSyncManager;
@@ -124,8 +122,9 @@ impl FenceSyncManager {
         ) {
             Ok(()) => Ok(()),
             // Cho phép tiếp tục nếu FD là memfd trong môi trường test
-            Err(e) if e.raw_os_error() == Some(libc::ENOTTY)
-                || e.raw_os_error() == Some(libc::EINVAL) =>
+            Err(e)
+                if e.raw_os_error() == Some(libc::ENOTTY)
+                    || e.raw_os_error() == Some(libc::EINVAL) =>
             {
                 Ok(())
             }
@@ -149,8 +148,9 @@ impl FenceSyncManager {
             (&mut sync_req as *mut DmaBufSync).cast::<c_void>(),
         ) {
             Ok(()) => Ok(()),
-            Err(e) if e.raw_os_error() == Some(libc::ENOTTY)
-                || e.raw_os_error() == Some(libc::EINVAL) =>
+            Err(e)
+                if e.raw_os_error() == Some(libc::ENOTTY)
+                    || e.raw_os_error() == Some(libc::EINVAL) =>
             {
                 Ok(())
             }

@@ -20,7 +20,12 @@ pub const fn ioc(dir: c_ulong, ty: c_ulong, nr: c_ulong, size: c_ulong) -> c_ulo
 }
 
 pub const fn iow<T>(ty: u8, nr: u8) -> c_ulong {
-    ioc(IOC_WRITE, ty as c_ulong, nr as c_ulong, std::mem::size_of::<T>() as c_ulong)
+    ioc(
+        IOC_WRITE,
+        ty as c_ulong,
+        nr as c_ulong,
+        std::mem::size_of::<T>() as c_ulong,
+    )
 }
 
 pub const fn iowr<T>(ty: u8, nr: u8) -> c_ulong {
