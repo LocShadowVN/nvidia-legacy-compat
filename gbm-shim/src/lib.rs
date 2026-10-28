@@ -1,4 +1,8 @@
-#![allow(non_camel_case_types, clippy::missing_safety_doc)]
+#![allow(
+    non_camel_case_types,
+    clippy::missing_safety_doc,
+    clippy::too_many_arguments
+)]
 
 pub mod drm_ioctl;
 pub mod egl_shim;
@@ -8,6 +12,7 @@ use crate::drm_ioctl::{
     create_dumb_buffer, destroy_dumb_buffer, export_prime_fd, import_prime_fd, map_dumb_buffer,
     DumbBufferAllocation,
 };
+use crate::egl_shim::{GlReadPixelsFn, GL_BGRA_EXT, GL_UNSIGNED_BYTE};
 use crate::sync::FenceSyncManager;
 use libc::{c_char, c_int, c_void, size_t};
 use std::ffi::CStr;
@@ -154,13 +159,66 @@ unsafe impl Send for SurfaceSlot {}
 
 #[repr(C)]
 pub struct gbm_surface {
-    device: *mut gbm_device,
-    width: u32,
-    height: u32,
-    format: u32,
-    flags: u32,
-    modifier: u64,
+    pub(crate) device: *mut gbm_device,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) format: u32,
+    pub(crate) flags: u32,
+    pub(crate) modifier: u64,
     slots: Mutex<Vec<SurfaceSlot>>,
+}
+
+/// Chép dữ liệu pixel từ Pbuffer/FBO của GPU NVIDIA vào slot khả dụng của `gbm_surface`
+pub(crate) unsafe fn gbm_surface_blit_pixels(
+    surface: *mut gbm_surface,
+    read_pixels_fn: GlReadPixelsFn,
+) -> bool {
+    if surface.is_null() {
+        return false;
+    }
+    let surf = &*surface;
+    let target_bo = match surf.slots.lock() {
+        Ok(slots) => slots
+            .iter()
+            .find(|s| s.state == SlotState::Free)
+            .or_else(|| slots.first())
+            .map(|s| s.bo)
+            .unwrap_or(ptr::null_mut()),
+        Err(_) => return false,
+    };
+
+    if target_bo.is_null() {
+        return false;
+    }
+
+    let mut stride: u32 = 0;
+    let mut map_data: *mut c_void = ptr::null_mut();
+    let mapped_ptr = gbm_bo_map(
+        target_bo,
+        0,
+        0,
+        surf.width,
+        surf.height,
+        GBM_BO_TRANSFER_WRITE,
+        &mut stride,
+        &mut map_data,
+    );
+    if mapped_ptr.is_null() {
+        return false;
+    }
+
+    read_pixels_fn(
+        0,
+        0,
+        surf.width as i32,
+        surf.height as i32,
+        GL_BGRA_EXT,
+        GL_UNSIGNED_BYTE,
+        mapped_ptr,
+    );
+
+    gbm_bo_unmap(target_bo, map_data);
+    true
 }
 
 // ============================================================================
@@ -946,9 +1004,11 @@ pub unsafe extern "C" fn gbm_surface_destroy(surface: *mut gbm_surface) {
 mod tests {
     use super::*;
     use crate::egl_shim::{
-        translate_gbm_to_device_display, EGLBoolean, EGLDeviceEXT, EGLDisplay, EGLenum, EGLint,
-        EGL_NO_DISPLAY, EGL_PLATFORM_DEVICE_EXT, EGL_PLATFORM_GBM_KHR, EGL_TRUE,
+        eglDestroySurface, translate_create_window_surface, translate_gbm_to_device_display,
+        translate_swap_buffers, EGLBoolean, EGLConfig, EGLDeviceEXT, EGLDisplay, EGLSurface,
+        EGLenum, EGLint, EGL_NO_DISPLAY, EGL_PLATFORM_DEVICE_EXT, EGL_PLATFORM_GBM_KHR, EGL_TRUE,
     };
+    use libc::c_uint;
     use std::sync::atomic::{AtomicBool, Ordering};
 
     fn create_mock_drm_fd() -> c_int {
@@ -1086,8 +1146,6 @@ mod tests {
         native_display: *mut c_void,
         _attrib_list: *const EGLint,
     ) -> EGLDisplay {
-        // Giả lập hành vi thật của libEGL_nvidia.so.0 bản 470.xx:
-        // Từ chối EGL_PLATFORM_GBM_KHR, chỉ chấp nhận EGL_PLATFORM_DEVICE_EXT
         if platform == EGL_PLATFORM_GBM_KHR {
             return EGL_NO_DISPLAY;
         }
@@ -1110,18 +1168,90 @@ mod tests {
         0
     }
 
+    unsafe extern "C" fn mock_create_pbuffer(
+        _dpy: EGLDisplay,
+        _config: EGLConfig,
+        _attrib_list: *const EGLint,
+    ) -> EGLSurface {
+        0x7777_8888usize as EGLSurface
+    }
+
+    unsafe extern "C" fn mock_gl_read_pixels(
+        _x: i32,
+        _y: i32,
+        width: i32,
+        height: i32,
+        _format: c_uint,
+        _gl_type: c_uint,
+        pixels: *mut c_void,
+    ) {
+        let count = (width as usize).saturating_mul(height as usize);
+        let slice = std::slice::from_raw_parts_mut(pixels.cast::<u32>(), count);
+        for px in slice.iter_mut() {
+            *px = 0xFFAA_BBCC;
+        }
+    }
+
     #[test]
-    fn test_egl_gbm_to_device_ext_interposer() {
+    fn test_egl_gbm_to_device_ext_and_swapbuffers_blit_pipeline() {
+        let drm_fd = create_mock_drm_fd();
         unsafe {
-            let dummy_gbm_dev = 0x1234usize as *mut c_void;
+            let dev = gbm_create_device(drm_fd);
             let dpy = translate_gbm_to_device_display(
                 EGL_PLATFORM_GBM_KHR,
-                dummy_gbm_dev,
+                dev.cast::<c_void>(),
                 ptr::null(),
                 mock_nvidia_470_get_platform_display_ext,
                 Some(mock_nvidia_470_query_devices_ext),
             );
             assert_eq!(dpy, 0xDEAD_BEEFusize as EGLDisplay);
+
+            let surf = gbm_surface_create(
+                dev,
+                64,
+                64,
+                GBM_FORMAT_XRGB8888,
+                GBM_BO_USE_SCANOUT | GBM_BO_USE_RENDERING,
+            );
+            assert!(!surf.is_null());
+
+            let egl_surf = translate_create_window_surface(
+                dpy,
+                ptr::null_mut(),
+                surf.cast::<c_void>(),
+                ptr::null(),
+                None,
+                mock_create_pbuffer,
+            );
+            assert_eq!(egl_surf, 0x7777_8888usize as EGLSurface);
+
+            let swapped = translate_swap_buffers(dpy, egl_surf, None, Some(mock_gl_read_pixels));
+            assert_eq!(swapped, EGL_TRUE);
+
+            let front_bo = gbm_surface_lock_front_buffer(surf);
+            assert!(!front_bo.is_null());
+
+            let mut stride: u32 = 0;
+            let mut map_data: *mut c_void = ptr::null_mut();
+            let ptr = gbm_bo_map(
+                front_bo,
+                0,
+                0,
+                64,
+                64,
+                GBM_BO_TRANSFER_READ,
+                &mut stride,
+                &mut map_data,
+            );
+            assert!(!ptr.is_null());
+            assert_eq!(*ptr.cast::<u32>(), 0xFFAA_BBCC);
+            gbm_bo_unmap(front_bo, map_data);
+
+            gbm_surface_release_buffer(surf, front_bo);
+            assert_eq!(eglDestroySurface(dpy, egl_surf), EGL_TRUE);
+            gbm_surface_destroy(surf);
+            gbm_device_destroy(dev);
+            libc::close(drm_fd);
         }
     }
 }
