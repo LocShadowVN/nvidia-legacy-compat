@@ -16,6 +16,14 @@ create_mock_nvidia_tree() {
              "${dst}/kernel/nvidia-drm" \
              "${dst}/kernel/nvidia-uvm"
 
+    cat > "${dst}/kernel/Kbuild" <<'EOF'
+EXTRA_CFLAGS += -I$(src)/common/inc
+EOF
+
+    cat > "${dst}/kernel/conftest.sh" <<'EOF'
+CFLAGS="-D__KERNEL__ -DKBUILD_BASENAME"
+EOF
+
     cat > "${dst}/kernel/common/inc/nv-linux.h" <<'EOF'
 static inline void nv_vm_flags_set(struct vm_area_struct *vma, vm_flags_t flags)
 {
@@ -105,7 +113,7 @@ if grep -q "follow_pfnmap_start" "${TREE_64}/kernel/nvidia/os-mlock.c"; then
 fi
 echo "[PASS] Kernel 6.4.12 selective patch test succeeded."
 
-echo "=== [TEST 2] Patching for Linux Kernel 6.12.1 (All 3 patches must apply cleanly) ==="
+echo "=== [TEST 2] Patching for Linux Kernel 6.12.1 (Patches 1..3 must apply cleanly) ==="
 TREE_612="${TEST_TMP}/tree_612"
 create_mock_nvidia_tree "${TREE_612}"
 bash "${AUTO_PATCH}" \
@@ -118,5 +126,21 @@ grep -q "vm_flags_set(vma, flags);" "${TREE_612}/kernel/common/inc/nv-linux.h"
 grep -q "pin_user_pages(start, nr_pages, gup_flags, pages);" "${TREE_612}/kernel/common/inc/nv-mm.h"
 grep -q "follow_pfnmap_start" "${TREE_612}/kernel/nvidia/os-mlock.c"
 grep -q "DRIVER_MODESET | DRIVER_ATOMIC" "${TREE_612}/kernel/nvidia-drm/nvidia-drm-drv.c"
-test -f "${TREE_612}/kernel/common/inc/nv-linux-6x-compat.h"
-echo "[PASS] Kernel 6.12.1 full patch stack test succeeded."
+echo "[PASS] Kernel 6.12.1 patch stack test succeeded."
+
+echo "=== [TEST 3] Patching for Linux Kernel 7.3.1 (All 4 patches + Kbuild/conftest 7.x fixes) ==="
+TREE_73="${TEST_TMP}/tree_73"
+create_mock_nvidia_tree "${TREE_73}"
+bash "${AUTO_PATCH}" \
+    --driver-version "470.256.02" \
+    --kernel-version "7.3.1-arch1-1" \
+    --source-dir "${TREE_73}" \
+    --skip-dkms
+
+grep -q "vm_flags_reset(vma, vma->vm_flags | flags);" "${TREE_73}/kernel/common/inc/nv-linux.h"
+grep -q "sysfb_primary_display.screen" "${TREE_73}/kernel/common/inc/nv-linux.h"
+grep -q "MODULE_DESCRIPTION" "${TREE_73}/kernel/nvidia-drm/nvidia-drm-drv.c"
+grep -q "ccflags-y" "${TREE_73}/kernel/Kbuild"
+grep -q "fms-extensions" "${TREE_73}/kernel/conftest.sh"
+test -f "${TREE_73}/kernel/common/inc/nv-linux-6x-compat.h"
+echo "[PASS] Kernel 7.3.1 full patch stack test succeeded."
