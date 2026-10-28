@@ -1,5 +1,5 @@
 use crate::drm_ioctl::{drm_ioctl, iow, iowr};
-use libc::{c_int, c_ulong, c_void, pollfd, POLLIN};
+use libc::{c_int, c_ulong, pollfd, POLLIN};
 use std::io::{Error, Result};
 
 const DMA_BUF_BASE: u8 = b'b';
@@ -49,11 +49,7 @@ impl FenceSyncManager {
             fd: -1,
         };
 
-        match drm_ioctl(
-            dmabuf_fd,
-            DMA_BUF_IOCTL_EXPORT_SYNC_FILE,
-            (&mut export_req as *mut DmaBufExportSyncFile).cast::<c_void>(),
-        ) {
+        match drm_ioctl(dmabuf_fd, DMA_BUF_IOCTL_EXPORT_SYNC_FILE, &mut export_req) {
             Ok(()) if export_req.fd >= 0 => {
                 let sync_fd = export_req.fd;
                 let wait_res = Self::poll_sync_fd(sync_fd, timeout_ms);
@@ -96,11 +92,7 @@ impl FenceSyncManager {
             fd: sync_fd,
         };
 
-        drm_ioctl(
-            dmabuf_fd,
-            DMA_BUF_IOCTL_IMPORT_SYNC_FILE,
-            (&mut import_req as *mut DmaBufImportSyncFile).cast::<c_void>(),
-        )
+        drm_ioctl(dmabuf_fd, DMA_BUF_IOCTL_IMPORT_SYNC_FILE, &mut import_req)
     }
 
     /// Bắt đầu phiên truy cập CPU đồng bộ trên DMA-BUF
@@ -113,11 +105,7 @@ impl FenceSyncManager {
         let mut sync_req = DmaBufSync {
             flags: DMA_BUF_SYNC_START | rw_flag,
         };
-        match drm_ioctl(
-            dmabuf_fd,
-            DMA_BUF_IOCTL_SYNC,
-            (&mut sync_req as *mut DmaBufSync).cast::<c_void>(),
-        ) {
+        match drm_ioctl(dmabuf_fd, DMA_BUF_IOCTL_SYNC, &mut sync_req) {
             Ok(()) => Ok(()),
             Err(e)
                 if e.raw_os_error() == Some(libc::ENOTTY)
@@ -139,11 +127,7 @@ impl FenceSyncManager {
         let mut sync_req = DmaBufSync {
             flags: DMA_BUF_SYNC_END | rw_flag,
         };
-        match drm_ioctl(
-            dmabuf_fd,
-            DMA_BUF_IOCTL_SYNC,
-            (&mut sync_req as *mut DmaBufSync).cast::<c_void>(),
-        ) {
+        match drm_ioctl(dmabuf_fd, DMA_BUF_IOCTL_SYNC, &mut sync_req) {
             Ok(()) => Ok(()),
             Err(e)
                 if e.raw_os_error() == Some(libc::ENOTTY)
