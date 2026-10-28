@@ -103,7 +103,10 @@ bash "${AUTO_PATCH}" \
     --skip-dkms
 
 grep -q "vm_flags_set(vma, flags);" "${TREE_64}/kernel/common/inc/nv-linux.h"
-! grep -q "follow_pfnmap_start" "${TREE_64}/kernel/nvidia/os-mlock.c"
+if grep -q "follow_pfnmap_start" "${TREE_64}/kernel/nvidia/os-mlock.c"; then
+    echo "[FAIL] Patch 0003 (Kernel 6.8+) should not be applied to Kernel 6.4.12" >&2
+    exit 1
+fi
 echo "[PASS] Kernel 6.4.12 selective patch test succeeded."
 
 echo "=== [TEST 2] Patching for Linux Kernel 6.12.1 (All 3 patches must apply cleanly) ==="
