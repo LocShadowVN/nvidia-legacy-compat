@@ -62,7 +62,8 @@ pub type EglCreatePbufferSurfaceFn = unsafe extern "C" fn(
     config: EGLConfig,
     attrib_list: *const EGLint,
 ) -> EGLSurface;
-pub type EglSwapBuffersFn = unsafe extern "C" fn(dpy: EGLDisplay, surface: EGLSurface) -> EGLBoolean;
+pub type EglSwapBuffersFn =
+    unsafe extern "C" fn(dpy: EGLDisplay, surface: EGLSurface) -> EGLBoolean;
 pub type EglDestroySurfaceFn =
     unsafe extern "C" fn(dpy: EGLDisplay, surface: EGLSurface) -> EGLBoolean;
 pub type GlReadPixelsFn = unsafe extern "C" fn(
@@ -306,9 +307,7 @@ pub unsafe extern "C" fn eglCreateWindowSurface(
     let win_fn = if win_ptr.is_null() {
         None
     } else {
-        Some(std::mem::transmute::<*mut c_void, EglCreateWindowSurfaceFn>(
-            win_ptr,
-        ))
+        Some(std::mem::transmute::<*mut c_void, EglCreateWindowSurfaceFn>(win_ptr))
     };
 
     let pbuf_ptr = resolve_next_symbol(c"eglCreatePbufferSurface");
@@ -358,7 +357,9 @@ pub unsafe extern "C" fn eglSwapBuffers(dpy: EGLDisplay, surface: EGLSurface) ->
     let swap_fn = if swap_ptr.is_null() {
         None
     } else {
-        Some(std::mem::transmute::<*mut c_void, EglSwapBuffersFn>(swap_ptr))
+        Some(std::mem::transmute::<*mut c_void, EglSwapBuffersFn>(
+            swap_ptr,
+        ))
     };
     translate_swap_buffers(dpy, surface, swap_fn, None)
 }
