@@ -90,10 +90,11 @@ pub const DRM_IOCTL_MODE_DESTROY_DUMB: c_ulong = iowr::<DrmModeDestroyDumb>(DRM_
 pub const DRM_CLOEXEC: u32 = libc::O_CLOEXEC as u32;
 pub const DRM_RDWR: u32 = libc::O_RDWR as u32;
 
-/// Thực thi ioctl có tự động thử lại khi gặp tín hiệu ngắt (EINTR)
-pub fn drm_ioctl(fd: c_int, request: c_ulong, arg: *mut c_void) -> Result<()> {
+/// Thực thi ioctl an toàn thông qua tham chiếu `&mut T`, tự động thử lại khi gặp EINTR
+pub fn drm_ioctl<T>(fd: c_int, request: c_ulong, arg: &mut T) -> Result<()> {
+    let arg_ptr = (arg as *mut T).cast::<c_void>();
     loop {
-        let ret = unsafe { libc::ioctl(fd, request, arg) };
+        let ret = unsafe { libc::ioctl(fd, request, arg_ptr) };
         if ret == 0 {
             return Ok(());
         }
@@ -132,11 +133,7 @@ pub fn create_dumb_buffer(
         size: 0,
     };
 
-    match drm_ioctl(
-        drm_fd,
-        DRM_IOCTL_MODE_CREATE_DUMB,
-        (&mut req as *mut DrmModeCreateDumb).cast::<c_void>(),
-    ) {
+    match drm_ioctl(drm_fd, DRM_IOCTL_MODE_CREATE_DUMB, &mut req) {
         Ok(()) => Ok(DumbBufferAllocation {
             handle: req.handle,
             pitch: req.pitch,
@@ -146,7 +143,6 @@ pub fn create_dumb_buffer(
         }),
         Err(e) if allow_memfd_fallback => {
             let bytes_per_pixel = bpp.div_ceil(8);
-            // Căn chỉnh stride (pitch) theo bội số của 64 bytes (chuẩn GPU cacheline)
             let raw_pitch = width.saturating_mul(bytes_per_pixel);
             let pitch = (raw_pitch + 63) & !63;
             let size = (pitch as u64).saturating_mul(height as u64);
@@ -190,11 +186,7 @@ pub fn export_prime_fd(drm_fd: c_int, alloc: &DumbBufferAllocation) -> Result<c_
         fd: -1,
     };
 
-    drm_ioctl(
-        drm_fd,
-        DRM_IOCTL_PRIME_HANDLE_TO_FD,
-        (&mut prime as *mut DrmPrimeHandle).cast::<c_void>(),
-    )?;
+    drm_ioctl(drm_fd, DRM_IOCTL_PRIME_HANDLE_TO_FD, &mut prime)?;
 
     Ok(prime.fd)
 }
@@ -211,11 +203,7 @@ pub fn import_prime_fd(
         fd: dmabuf_fd,
     };
 
-    match drm_ioctl(
-        drm_fd,
-        DRM_IOCTL_PRIME_FD_TO_HANDLE,
-        (&mut prime as *mut DrmPrimeHandle).cast::<c_void>(),
-    ) {
+    match drm_ioctl(drm_fd, DRM_IOCTL_PRIME_FD_TO_HANDLE, &mut prime) {
         Ok(()) => Ok((prime.handle, false, -1)),
         Err(e) if allow_memfd_fallback => {
             let dup_fd = unsafe { libc::fcntl(dmabuf_fd, libc::F_DUPFD_CLOEXEC, 0) };
@@ -234,19 +222,15 @@ pub fn map_dumb_buffer(
     alloc: &DumbBufferAllocation,
     prot: c_int,
 ) -> Result<*mut c_void> {
-    let (map_fd, offset) = if alloc.is_mock_memfd {
-        (alloc.backing_fd, 0 as off_t)
+    let (map_fd, offset): (c_int, off_t) = if alloc.is_mock_memfd {
+        (alloc.backing_fd, 0)
     } else {
         let mut map_req = DrmModeMapDumb {
             handle: alloc.handle,
             pad: 0,
             offset: 0,
         };
-        drm_ioctl(
-            drm_fd,
-            DRM_IOCTL_MODE_MAP_DUMB,
-            (&mut map_req as *mut DrmModeMapDumb).cast::<c_void>(),
-        )?;
+        drm_ioctl(drm_fd, DRM_IOCTL_MODE_MAP_DUMB, &mut map_req)?;
         (drm_fd, map_req.offset as off_t)
     };
 
@@ -283,19 +267,11 @@ pub fn destroy_dumb_buffer(drm_fd: c_int, alloc: &DumbBufferAllocation, imported
             handle: alloc.handle,
             pad: 0,
         };
-        let _ = drm_ioctl(
-            drm_fd,
-            DRM_IOCTL_GEM_CLOSE,
-            (&mut close_req as *mut DrmGemClose).cast::<c_void>(),
-        );
+        let _ = drm_ioctl(drm_fd, DRM_IOCTL_GEM_CLOSE, &mut close_req);
     } else {
         let mut destroy_req = DrmModeDestroyDumb {
             handle: alloc.handle,
         };
-        let _ = drm_ioctl(
-            drm_fd,
-            DRM_IOCTL_MODE_DESTROY_DUMB,
-            (&mut destroy_req as *mut DrmModeDestroyDumb).cast::<c_void>(),
-        );
+        let _ = drm_ioctl(drm_fd, DRM_IOCTL_MODE_DESTROY_DUMB, &mut destroy_req);
     }
 }
