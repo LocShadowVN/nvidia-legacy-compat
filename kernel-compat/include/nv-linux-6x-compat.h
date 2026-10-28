@@ -1,8 +1,8 @@
 /* SPDX-License-Identifier: MIT */
 /*
  * nv-linux-6x-compat.h
- * Compatibility shim for Legacy NVIDIA Drivers (470.xx, 390.xx, 340.xx)
- * on Linux Kernel 6.0 through 6.12+
+ * Production compatibility shim for Legacy NVIDIA Drivers (470.xx, 390.xx, 340.xx)
+ * Supports Linux Kernel 6.0 through 7.x.x (7.0, 7.1, 7.2, 7.3+)
  */
 
 #ifndef _NV_LINUX_6X_COMPAT_H_
@@ -11,18 +11,30 @@
 #include <linux/version.h>
 #include <linux/mm.h>
 #include <linux/sched/mm.h>
+#include <linux/timer.h>
+#include <linux/string.h>
+#include <linux/interrupt.h>
+#include <linux/dma-fence.h>
 #include <drm/drm_drv.h>
 #include <drm/drm_ioctl.h>
 #include <drm/drm_prime.h>
 #include <drm/drm_fb_helper.h>
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 0, 0)
+#include <linux/sysfb.h>
+#endif
+
 /*
- * 1. Linux 6.3+: vma->vm_flags chuyển thành biến hằng (__vm_flags)
- * Bắt buộc sử dụng vm_flags_set() và vm_flags_clear()
+ * 1. Quản lý cờ VMA:
+ * - Linux 6.3 -> 6.14: dùng vm_flags_set() / vm_flags_clear()
+ * - Linux 6.15+ & 7.x: vm_flags_set() gọi __vma_start_write() (GPL-only).
+ *   Sử dụng vm_flags_reset() trên các VMA đã giữ khóa trong mmap_region.
  */
 static inline void nv_vm_flags_set(struct vm_area_struct *vma, vm_flags_t flags)
 {
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 3, 0)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 15, 0)
+    vm_flags_reset(vma, vma->vm_flags | flags);
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(6, 3, 0)
     vm_flags_set(vma, flags);
 #else
     vma->vm_flags |= flags;
@@ -31,7 +43,9 @@ static inline void nv_vm_flags_set(struct vm_area_struct *vma, vm_flags_t flags)
 
 static inline void nv_vm_flags_clear(struct vm_area_struct *vma, vm_flags_t flags)
 {
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 3, 0)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 15, 0)
+    vm_flags_reset(vma, vma->vm_flags & ~flags);
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(6, 3, 0)
     vm_flags_clear(vma, flags);
 #else
     vma->vm_flags &= ~flags;
@@ -39,8 +53,8 @@ static inline void nv_vm_flags_clear(struct vm_area_struct *vma, vm_flags_t flag
 }
 
 /*
- * 2. Linux 6.5+: Loại bỏ tham số `struct vm_area_struct **vmas` khỏi
- * get_user_pages(), pin_user_pages(), và get_user_pages_remote()
+ * 2. Linux 6.5+ & 7.x: Loại bỏ tham số `struct vm_area_struct **vmas`
+ * khỏi get_user_pages(), pin_user_pages(), và get_user_pages_remote()
  */
 static inline long nv_get_user_pages(unsigned long start,
                                      unsigned long nr_pages,
@@ -89,8 +103,7 @@ static inline long nv_get_user_pages_remote(struct mm_struct *mm,
 }
 
 /*
- * 3. Linux 6.10+: Hàm follow_pfn() bị loại bỏ khỏi mm/memory.c
- * Thay thế bằng follow_pte() (6.10 - 6.11) hoặc follow_pfnmap_start() (6.12+)
+ * 3. Linux 6.10+ / 6.12+ / 7.x: Thay thế follow_pfn() bằng follow_pfnmap_start()
  */
 static inline int nv_follow_pfn(struct vm_area_struct *vma,
                                 unsigned long address,
@@ -122,11 +135,71 @@ static inline int nv_follow_pfn(struct vm_area_struct *vma,
 }
 
 /*
- * 4. Linux 6.8+: Cờ DRM_UNLOCKED bị gỡ bỏ vì mọi DRM IOCTL hiện đại
- * đều mặc định chạy không giữ drm_global_mutex.
+ * 4. Linux 6.8+: Cờ DRM_UNLOCKED bị gỡ bỏ
  */
 #ifndef DRM_UNLOCKED
 #define DRM_UNLOCKED 0
+#endif
+
+/*
+ * 5. Linux 6.15+ & 7.x: del_timer() / del_timer_sync() bị xóa,
+ * chuyển sang timer_delete() / timer_delete_sync()
+ */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 15, 0)
+#ifndef del_timer
+#define del_timer(t) timer_delete(t)
+#endif
+#ifndef del_timer_sync
+#define del_timer_sync(t) timer_delete_sync(t)
+#endif
+#endif
+
+/*
+ * 6. Linux 6.19+ & 7.x: in_irq() bị xóa, chuyển sang in_hardirq()
+ */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 19, 0)
+#ifndef in_irq
+#define in_irq() in_hardirq()
+#endif
+#endif
+
+/*
+ * 7. Linux 7.0+:
+ * - screen_info chuyển thành sysfb_primary_display.screen
+ * - dma_fence_signal() trả về void
+ */
+static inline const struct screen_info *nv_get_screen_info(void)
+{
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 0, 0)
+    return &sysfb_primary_display.screen;
+#else
+    return &screen_info;
+#endif
+}
+
+static inline int nv_dma_fence_signal(struct dma_fence *fence)
+{
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 0, 0)
+    dma_fence_signal(fence);
+    return 0;
+#else
+    return dma_fence_signal(fence);
+#endif
+}
+
+/*
+ * 8. Linux 7.2+ / 7.3+: strncpy() bị xóa khỏi kernel, thay bằng strscpy()
+ */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 2, 0)
+static inline char *nv_compat_strncpy(char *dest, const char *src, size_t count)
+{
+    if (count > 0)
+        strscpy(dest, src, count);
+    return dest;
+}
+#ifndef strncpy
+#define strncpy(d, s, n) nv_compat_strncpy((d), (s), (n))
+#endif
 #endif
 
 #endif /* _NV_LINUX_6X_COMPAT_H_ */
