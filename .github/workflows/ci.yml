@@ -80,6 +80,5 @@ jobs:
       - name: Build production shared library (libgbm.so.1) with version script
         working-directory: gbm-shim
         run: |
-          RUSTFLAGS="-C link-arg=-Wl,--version-script=$(pwd)/linker.lds -C link-arg=-Wl,-soname,libgbm.so.1" \
-            cargo build --release
+          cargo build --release
           nm -D --with-symbol-versions target/release/libgbm.so | grep "GBM_1.0"
