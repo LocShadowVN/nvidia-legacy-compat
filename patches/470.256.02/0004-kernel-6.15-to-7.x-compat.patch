@@ -1,0 +1,45 @@
+--- a/kernel/common/inc/nv-linux.h
++++ b/kernel/common/inc/nv-linux.h
+@@ -1,16 +1,24 @@
+ static inline void nv_vm_flags_set(struct vm_area_struct *vma, vm_flags_t flags)
+ {
+-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 3, 0)
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 15, 0)
++    vm_flags_reset(vma, vma->vm_flags | flags);
++#elif LINUX_VERSION_CODE >= KERNEL_VERSION(6, 3, 0)
+     vm_flags_set(vma, flags);
+ #else
+     vma->vm_flags |= flags;
+ #endif
+ }
+ static inline void nv_vm_flags_clear(struct vm_area_struct *vma, vm_flags_t flags)
+ {
+-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 3, 0)
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 15, 0)
++    vm_flags_reset(vma, vma->vm_flags & ~flags);
++#elif LINUX_VERSION_CODE >= KERNEL_VERSION(6, 3, 0)
+     vm_flags_clear(vma, flags);
+ #else
+     vma->vm_flags &= ~flags;
+ #endif
+ }
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 0, 0)
++#include <linux/sysfb.h>
++#define nv_screen_info (sysfb_primary_display.screen)
++#endif
+--- a/kernel/nvidia-drm/nvidia-drm-drv.c
++++ b/kernel/nvidia-drm/nvidia-drm-drv.c
+@@ -16,8 +16,13 @@
+ static struct drm_driver nv_drm_driver = {
+     .driver_features        = DRIVER_GEM | DRIVER_RENDER | DRIVER_MODESET | DRIVER_ATOMIC,
+     .ioctls                 = nv_drm_ioctls,
+     .num_ioctls             = ARRAY_SIZE(nv_drm_ioctls),
+     .prime_handle_to_fd     = drm_gem_prime_handle_to_fd,
+     .prime_fd_to_handle     = drm_gem_prime_fd_to_handle,
+     .gem_prime_import       = nv_drm_gem_prime_import,
+     .gem_prime_import_sg_table = nv_drm_gem_prime_import_sg_table,
++#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 14, 0)
++    .date                   = "20160202",
++#endif
++};
++MODULE_DESCRIPTION("NVIDIA GPU DRM Legacy Driver");
