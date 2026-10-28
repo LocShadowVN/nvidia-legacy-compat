@@ -85,12 +85,20 @@ jobs:
           #elif LINUX_VERSION_CODE >= KERNEL_VERSION(6, 10, 0)
           typedef struct { unsigned long pfn; } pte_t;
           typedef int spinlock_t;
-          static inline int follow_pte(struct vm_area_struct *v, unsigned long a, pte_t **p, spinlock_t **l) { (void)v;(void)a;(void)p;(void)l; return 0; }
+          static inline int follow_pte(struct vm_area_struct *v, unsigned long a, pte_t **p, spinlock_t **l) {
+              static pte_t mock_pte = { .pfn = 0x1000 };
+              static spinlock_t mock_lock = 0;
+              (void)v;
+              (void)a;
+              *p = &mock_pte;
+              *l = &mock_lock;
+              return 0;
+          }
           static inline pte_t ptep_get(pte_t *p) { return *p; }
           static inline unsigned long pte_pfn(pte_t p) { return p.pfn; }
           static inline void pte_unmap_unlock(pte_t *p, spinlock_t *l) { (void)p;(void)l; }
           #else
-          static inline int follow_pfn(struct vm_area_struct *v, unsigned long a, unsigned long *p) { (void)v;(void)a;*p = 0; return 0; }
+          static inline int follow_pfn(struct vm_area_struct *v, unsigned long a, unsigned long *p) { (void)v;(void)a;*p = 0x1000; return 0; }
           #endif
           EOF
 
@@ -148,11 +156,13 @@ jobs:
               nv_vm_flags_set(&vma, 0x4);
               nv_vm_flags_clear(&vma, 0x4);
               unsigned long pfn = 0;
-              (void)nv_follow_pfn(&vma, 0x1000, &pfn);
+              if (nv_follow_pfn(&vma, 0x1000, &pfn) != 0 || pfn != 0x1000) {
+                  return 1;
+              }
               struct dma_fence fence = { 0 };
               (void)nv_dma_fence_signal(&fence);
               const struct screen_info *si = nv_get_screen_info();
-              return si ? 0 : 1;
+              return (si && si->width == 1920) ? 0 : 1;
           }
           EOF
 
