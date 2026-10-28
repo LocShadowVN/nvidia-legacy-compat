@@ -40,7 +40,6 @@ Options:
 EOF
 }
 
-# Chuẩn hóa chuỗi kernel an toàn tuyệt đối (VD: "7.2.9-arch1-1" -> "7.2.9", "7.0-rc1" -> "7.0.0")
 normalize_semver() {
     local raw="$1"
     local clean="${raw%%-*}"
@@ -184,21 +183,19 @@ extract_installer() {
     printf "%s" "${target_extract}"
 }
 
-# Tự động nâng cấp Kbuild & conftest.sh trên bộ nguồn .run thật cho Kernel 6.15+ và 7.x
 apply_real_kbuild_and_conftest_fixes() {
     local target_dir="$1"
     (( DRY_RUN == 1 )) && return 0
 
     local kbuild_file="${target_dir}/kernel/Kbuild"
     if [[ -f "${kbuild_file}" ]]; then
-        # Kernel 6.15+ và 7.x đã xóa EXTRA_CFLAGS, bắt buộc chuyển sang ccflags-y
         sed -i 's/\bEXTRA_CFLAGS\b/ccflags-y/g' "${kbuild_file}"
         if ! grep -q "nv-linux-6x-compat.h" "${kbuild_file}"; then
             cat >> "${kbuild_file}" <<'EOF'
 
 # Injected by nvidia-legacy-compat for Kernel 6.x / 7.x
 ccflags-y += -include $(src)/common/inc/nv-linux-6x-compat.h
-ccflags-y += -Wno-error=implicit-function-declaration -Wno-error=strict-prototypes -fms-extensions
+ccflags-y += -Wno-error=implicit-function-declaration -Wno-error=strict-prototypes -Wno-error=incompatible-pointer-types -fms-extensions
 EOF
             log_ok "Updated Kbuild (EXTRA_CFLAGS -> ccflags-y & force-included nv-linux-6x-compat.h)"
         fi
@@ -207,7 +204,7 @@ EOF
     local conftest_file="${target_dir}/kernel/conftest.sh"
     if [[ -f "${conftest_file}" ]]; then
         if ! grep -q "fms-extensions" "${conftest_file}"; then
-            sed -i 's/CFLAGS="/CFLAGS="-fms-extensions -Wno-implicit-function-declaration -Wno-strict-prototypes /g' "${conftest_file}"
+            sed -i 's/CFLAGS="/CFLAGS="-fms-extensions -Wno-implicit-function-declaration -Wno-strict-prototypes -Wno-incompatible-pointer-types /g' "${conftest_file}"
             log_ok "Patched conftest.sh with GCC 14/15/16 & Kernel 6.19+/7.x flags (-fms-extensions)"
         fi
     fi
