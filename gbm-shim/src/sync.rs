@@ -4,10 +4,10 @@ use std::io::{Error, Result};
 
 const DMA_BUF_BASE: u8 = b'b';
 
-pub const DMA_BUF_SYNC_READ: u64 = 1 << 0;
-pub const DMA_BUF_SYNC_WRITE: u64 = 2 << 0;
+pub const DMA_BUF_SYNC_READ: u64 = 1;
+pub const DMA_BUF_SYNC_WRITE: u64 = 2;
 pub const DMA_BUF_SYNC_RW: u64 = DMA_BUF_SYNC_READ | DMA_BUF_SYNC_WRITE;
-pub const DMA_BUF_SYNC_START: u64 = 0 << 2;
+pub const DMA_BUF_SYNC_START: u64 = 0;
 pub const DMA_BUF_SYNC_END: u64 = 1 << 2;
 
 #[repr(C)]
@@ -39,7 +39,6 @@ pub struct FenceSyncManager;
 
 impl FenceSyncManager {
     /// Trích xuất `sync_file` FD từ DMA-BUF và đợi (poll) cho đến khi GPU hoàn tất ghi dữ liệu.
-    /// Ngăn chặn Wayland Compositor đọc buffer khi GPU NVIDIA chưa render xong frame.
     pub fn wait_dmabuf_ready(dmabuf_fd: c_int, timeout_ms: c_int) -> Result<()> {
         if dmabuf_fd < 0 {
             return Ok(());
@@ -63,7 +62,6 @@ impl FenceSyncManager {
                 }
                 wait_res
             }
-            // Nếu kernel/memfd không hỗ trợ EXPORT_SYNC_FILE, fallback sang DMA_BUF_IOCTL_SYNC
             _ => Self::fallback_cpu_sync(dmabuf_fd),
         }
     }
@@ -121,7 +119,6 @@ impl FenceSyncManager {
             (&mut sync_req as *mut DmaBufSync).cast::<c_void>(),
         ) {
             Ok(()) => Ok(()),
-            // Cho phép tiếp tục nếu FD là memfd trong môi trường test
             Err(e)
                 if e.raw_os_error() == Some(libc::ENOTTY)
                     || e.raw_os_error() == Some(libc::EINVAL) =>
