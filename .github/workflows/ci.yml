@@ -9,36 +9,167 @@ permissions:
   contents: write
 
 jobs:
-  verify-patches-and-scripts:
-    name: Patch Matrix & Bash Pipeline Verification
+  verify-patches-and-kernel-compat:
+    name: Kernel 6.x/7.x Patches, Matrix & GCC Verification
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install tools (jq, shellcheck, patch)
+      - name: Install system tools (jq, shellcheck, patch, gcc)
         run: |
           sudo apt-get update
-          sudo apt-get install -y jq shellcheck patch
+          sudo apt-get install -y jq shellcheck patch build-essential
 
-      - name: Lint Bash scripts with ShellCheck
+      - name: Lint all Bash scripts with ShellCheck
         run: |
-          shellcheck scripts/auto-patch.sh tests/test_auto_patch.sh
+          shellcheck scripts/*.sh tests/*.sh
 
-      - name: Validate patch-matrix.json syntax & referenced files
+      - name: Validate patch-matrix.json integrity & kernel ranges
         run: |
           jq empty patches/patch-matrix.json
           for f in $(jq -r '.drivers[].patches[].file' patches/patch-matrix.json | sort -u); do
-            test -f "patches/${f}" || (echo "Missing patch file: patches/${f}" && exit 1)
+            if [[ ! -s "patches/${f}" ]]; then
+              echo "[ERR] Missing or empty patch file: patches/${f}" >&2
+              exit 1
+            fi
           done
+          echo "[OK] All patch files in patch-matrix.json exist and are non-empty."
 
-      - name: Execute automated patch & semver test suite
+      - name: Execute automated patch & semver test suite (6.4 -> 6.12 -> 7.3)
         run: |
-          chmod +x scripts/auto-patch.sh tests/test_auto_patch.sh
+          chmod +x scripts/*.sh tests/*.sh
           ./tests/test_auto_patch.sh
 
+      - name: Compile-test nv-linux-6x-compat.h with GCC across 8 Kernel versions (6.1 -> 7.3)
+        run: |
+          MOCK_INC="$(mktemp -d)"
+          mkdir -p "${MOCK_INC}/linux" "${MOCK_INC}/linux/sched" "${MOCK_INC}/drm"
+
+          # Tạo các header giả lập của Kernel để GCC kiểm tra chặt chẽ mọi nhánh #if LINUX_VERSION_CODE
+          cat > "${MOCK_INC}/linux/version.h" << 'EOF'
+          #define KERNEL_VERSION(a,b,c) (((a) << 16) + ((b) << 8) + ((c) > 255 ? 255 : (c)))
+          #ifndef LINUX_VERSION_CODE
+          #define LINUX_VERSION_CODE KERNEL_VERSION(7, 3, 0)
+          #endif
+          EOF
+
+          cat > "${MOCK_INC}/linux/mm.h" << 'EOF'
+          #include <linux/version.h>
+          #include <stddef.h>
+          typedef unsigned long vm_flags_t;
+          struct vm_area_struct { vm_flags_t vm_flags; };
+          struct page { int dummy; };
+          struct mm_struct { int dummy; };
+
+          #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 15, 0)
+          static inline void vm_flags_reset(struct vm_area_struct *vma, vm_flags_t flags) { vma->vm_flags = flags; }
+          #elif LINUX_VERSION_CODE >= KERNEL_VERSION(6, 3, 0)
+          static inline void vm_flags_set(struct vm_area_struct *vma, vm_flags_t flags) { vma->vm_flags |= flags; }
+          static inline void vm_flags_clear(struct vm_area_struct *vma, vm_flags_t flags) { vma->vm_flags &= ~flags; }
+          #endif
+
+          #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 5, 0)
+          static inline long get_user_pages(unsigned long s, unsigned long n, unsigned int g, struct page **p) { (void)s;(void)n;(void)g;(void)p; return 0; }
+          static inline long pin_user_pages(unsigned long s, unsigned long n, unsigned int g, struct page **p) { (void)s;(void)n;(void)g;(void)p; return 0; }
+          static inline long get_user_pages_remote(struct mm_struct *m, unsigned long s, unsigned long n, unsigned int g, struct page **p, int *l) { (void)m;(void)s;(void)n;(void)g;(void)p;(void)l; return 0; }
+          #else
+          static inline long get_user_pages(unsigned long s, unsigned long n, unsigned int g, struct page **p, struct vm_area_struct **v) { (void)s;(void)n;(void)g;(void)p;(void)v; return 0; }
+          static inline long pin_user_pages(unsigned long s, unsigned long n, unsigned int g, struct page **p, struct vm_area_struct **v) { (void)s;(void)n;(void)g;(void)p;(void)v; return 0; }
+          static inline long get_user_pages_remote(struct mm_struct *m, unsigned long s, unsigned long n, unsigned int g, struct page **p, struct vm_area_struct **v, int *l) { (void)m;(void)s;(void)n;(void)g;(void)p;(void)v;(void)l; return 0; }
+          #endif
+
+          #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 12, 0)
+          struct follow_pfnmap_args { struct vm_area_struct *vma; unsigned long address; unsigned long pfn; };
+          static inline int follow_pfnmap_start(struct follow_pfnmap_args *args) { args->pfn = 0x1000; return 0; }
+          static inline void follow_pfnmap_end(struct follow_pfnmap_args *args) { (void)args; }
+          #elif LINUX_VERSION_CODE >= KERNEL_VERSION(6, 10, 0)
+          typedef struct { unsigned long pfn; } pte_t;
+          typedef int spinlock_t;
+          static inline int follow_pte(struct vm_area_struct *v, unsigned long a, pte_t **p, spinlock_t **l) { (void)v;(void)a;(void)p;(void)l; return 0; }
+          static inline pte_t ptep_get(pte_t *p) { return *p; }
+          static inline unsigned long pte_pfn(pte_t p) { return p.pfn; }
+          static inline void pte_unmap_unlock(pte_t *p, spinlock_t *l) { (void)p;(void)l; }
+          #else
+          static inline int follow_pfn(struct vm_area_struct *v, unsigned long a, unsigned long *p) { (void)v;(void)a;*p = 0; return 0; }
+          #endif
+          EOF
+
+          touch "${MOCK_INC}/linux/sched/mm.h" \
+                "${MOCK_INC}/drm/drm_drv.h" \
+                "${MOCK_INC}/drm/drm_ioctl.h" \
+                "${MOCK_INC}/drm/drm_prime.h" \
+                "${MOCK_INC}/drm/drm_fb_helper.h"
+
+          cat > "${MOCK_INC}/linux/timer.h" << 'EOF'
+          struct timer_list { int dummy; };
+          static inline int timer_delete(struct timer_list *t) { (void)t; return 0; }
+          static inline int timer_delete_sync(struct timer_list *t) { (void)t; return 0; }
+          EOF
+
+          cat > "${MOCK_INC}/linux/string.h" << 'EOF'
+          #include <stddef.h>
+          #include <sys/types.h>
+          static inline ssize_t strscpy(char *d, const char *s, size_t c) { (void)d;(void)s;(void)c; return 0; }
+          EOF
+
+          cat > "${MOCK_INC}/linux/interrupt.h" << 'EOF'
+          static inline int in_hardirq(void) { return 0; }
+          EOF
+
+          cat > "${MOCK_INC}/linux/dma-fence.h" << 'EOF'
+          #include <linux/version.h>
+          struct dma_fence { int dummy; };
+          #if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 0, 0)
+          static inline void dma_fence_signal(struct dma_fence *f) { (void)f; }
+          #else
+          static inline int dma_fence_signal(struct dma_fence *f) { (void)f; return 0; }
+          #endif
+          EOF
+
+          cat > "${MOCK_INC}/linux/sysfb.h" << 'EOF'
+          struct screen_info { int width; };
+          struct sysfb_display { struct screen_info screen; };
+          extern struct sysfb_display sysfb_primary_display;
+          EOF
+
+          cat > "${MOCK_INC}/test_compat.c" << 'EOF'
+          #include <linux/version.h>
+          #if LINUX_VERSION_CODE < KERNEL_VERSION(7, 0, 0)
+          struct screen_info { int width; };
+          struct screen_info screen_info = { .width = 1920 };
+          #else
+          #include <linux/sysfb.h>
+          struct sysfb_display sysfb_primary_display = { .screen = { .width = 1920 } };
+          #endif
+          #include "nv-linux-6x-compat.h"
+
+          int main(void) {
+              struct vm_area_struct vma = { .vm_flags = 0 };
+              nv_vm_flags_set(&vma, 0x4);
+              nv_vm_flags_clear(&vma, 0x4);
+              unsigned long pfn = 0;
+              (void)nv_follow_pfn(&vma, 0x1000, &pfn);
+              struct dma_fence fence = { 0 };
+              (void)nv_dma_fence_signal(&fence);
+              const struct screen_info *si = nv_get_screen_info();
+              return si ? 0 : 1;
+          }
+          EOF
+
+          for kv in "6,1,0" "6,4,0" "6,6,0" "6,10,0" "6,12,0" "6,15,0" "7,0,0" "7,3,0"; do
+            echo "--> Compiling nv-linux-6x-compat.h against simulated Kernel (${kv})..."
+            gcc -Wall -Wextra -Werror \
+              -DLINUX_VERSION_CODE="KERNEL_VERSION(${kv})" \
+              -I"${MOCK_INC}" -Ikernel-compat/include \
+              "${MOCK_INC}/test_compat.c" -o "${MOCK_INC}/test_bin"
+            "${MOCK_INC}/test_bin"
+          done
+          rm -rf "${MOCK_INC}"
+          echo "[PASS] nv-linux-6x-compat.h compiled and executed cleanly across all 8 Kernel versions!"
+
   build-and-test-gbm-shim:
-    name: Rust Wayland GBM Shim (libgbm.so) Build & Tests
+    name: Rust Wayland GBM & EGL Shim (Build, Rust Tests & C-ABI Test)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -67,18 +198,149 @@ jobs:
             git push origin HEAD:${{ github.ref_name }} || true
           fi
 
-      - name: Run Clippy lints
+      - name: Run Clippy strict lints
         working-directory: gbm-shim
         run: |
           cargo clippy --all-targets -- -D warnings
 
-      - name: Run GBM C-ABI & Fence Sync Unit Tests
+      - name: Run Rust Unit Tests (GBM C-ABI, Fence Sync & EGL Interposer)
         working-directory: gbm-shim
         run: |
           cargo test -- --nocapture
 
-      - name: Build production shared library (libgbm.so.1)
+      - name: Build production shared library (libgbm.so.1) & verify ELF symbols
         working-directory: gbm-shim
         run: |
           cargo build --release
-          nm -D target/release/libgbm.so | grep "gbm_create_device"
+          ln -sf libgbm.so target/release/libgbm.so.1
+
+          readelf -d target/release/libgbm.so | grep "libgbm.so.1"
+          for sym in \
+            gbm_create_device \
+            gbm_device_destroy \
+            gbm_bo_create \
+            gbm_bo_create_with_modifiers2 \
+            gbm_bo_import \
+            gbm_bo_map \
+            gbm_bo_unmap \
+            gbm_bo_get_fd \
+            gbm_bo_destroy \
+            gbm_surface_create \
+            gbm_surface_lock_front_buffer \
+            gbm_surface_release_buffer \
+            gbm_surface_destroy \
+            eglGetPlatformDisplay \
+            eglGetPlatformDisplayEXT; do
+            nm -D target/release/libgbm.so | grep -q " ${sym}$" || {
+              echo "[ERR] Missing exported symbol in libgbm.so: ${sym}" >&2
+              exit 1
+            }
+          done
+          echo "[PASS] All required GBM & EGL C-ABI symbols verified in libgbm.so.1"
+
+      - name: Run Real C Wayland Compositor Simulation against libgbm.so.1
+        working-directory: gbm-shim
+        run: |
+          C_TEST_DIR="$(mktemp -d)"
+          cat > "${C_TEST_DIR}/compositor_sim.c" << 'EOF'
+          #define _GNU_SOURCE
+          #include <assert.h>
+          #include <stdint.h>
+          #include <stdio.h>
+          #include <stdlib.h>
+          #include <string.h>
+          #include <sys/mman.h>
+          #include <unistd.h>
+
+          struct gbm_device;
+          struct gbm_bo;
+          struct gbm_surface;
+
+          extern struct gbm_device *gbm_create_device(int fd);
+          extern int gbm_device_get_fd(struct gbm_device *gbm);
+          extern const char *gbm_device_get_backend_name(struct gbm_device *gbm);
+          extern int gbm_device_is_format_supported(struct gbm_device *gbm, uint32_t format, uint32_t flags);
+          extern void gbm_device_destroy(struct gbm_device *gbm);
+
+          extern struct gbm_bo *gbm_bo_create(struct gbm_device *gbm, uint32_t width, uint32_t height, uint32_t format, uint32_t flags);
+          extern void *gbm_bo_map(struct gbm_bo *bo, uint32_t x, uint32_t y, uint32_t width, uint32_t height, uint32_t flags, uint32_t *stride, void **map_data);
+          extern void gbm_bo_unmap(struct gbm_bo *bo, void *map_data);
+          extern int gbm_bo_get_fd(struct gbm_bo *bo);
+          extern uint32_t gbm_bo_get_width(struct gbm_bo *bo);
+          extern uint32_t gbm_bo_get_height(struct gbm_bo *bo);
+          extern uint32_t gbm_bo_get_stride(struct gbm_bo *bo);
+          extern void gbm_bo_destroy(struct gbm_bo *bo);
+
+          extern struct gbm_surface *gbm_surface_create(struct gbm_device *gbm, uint32_t width, uint32_t height, uint32_t format, uint32_t flags);
+          extern struct gbm_bo *gbm_surface_lock_front_buffer(struct gbm_surface *surface);
+          extern void gbm_surface_release_buffer(struct gbm_surface *surface, struct gbm_bo *bo);
+          extern int gbm_surface_has_free_buffers(struct gbm_surface *surface);
+          extern void gbm_surface_destroy(struct gbm_surface *surface);
+
+          extern void *eglGetPlatformDisplay(uint32_t platform, void *native_display, const intptr_t *attrib_list);
+
+          int main(void) {
+              setenv("NV_GBM_ALLOW_MEMFD_FALLBACK", "1", 1);
+
+              int drm_fd = memfd_create("c_compositor_drm", MFD_CLOEXEC);
+              assert(drm_fd >= 0);
+
+              struct gbm_device *dev = gbm_create_device(drm_fd);
+              assert(dev != NULL);
+              assert(gbm_device_get_fd(dev) == drm_fd);
+              assert(strcmp(gbm_device_get_backend_name(dev), "nvidia-legacy-drm-gbm") == 0);
+
+              uint32_t fmt_xrgb8888 = 0x34325258; /* GBM_FORMAT_XRGB8888 */
+              assert(gbm_device_is_format_supported(dev, fmt_xrgb8888, 1 | 4) == 1);
+
+              /* 1. Test Buffer Object allocation, PRIME FD export & mmap read/write */
+              struct gbm_bo *bo = gbm_bo_create(dev, 1920, 1080, fmt_xrgb8888, 1 | 4);
+              assert(bo != NULL);
+              assert(gbm_bo_get_width(bo) == 1920);
+              assert(gbm_bo_get_height(bo) == 1080);
+              assert(gbm_bo_get_stride(bo) >= 1920 * 4);
+
+              int dmabuf_fd = gbm_bo_get_fd(bo);
+              assert(dmabuf_fd >= 0);
+
+              uint32_t stride = 0;
+              void *map_data = NULL;
+              uint32_t *pixels = (uint32_t *)gbm_bo_map(bo, 0, 0, 1920, 1080, 3, &stride, &map_data);
+              assert(pixels != NULL);
+              assert(map_data != NULL);
+              pixels[500] = 0xCAFEBABEu;
+              assert(pixels[500] == 0xCAFEBABEu);
+              gbm_bo_unmap(bo, map_data);
+              close(dmabuf_fd);
+              gbm_bo_destroy(bo);
+
+              /* 2. Test Triple-Buffered Wayland Surface Swapchain */
+              struct gbm_surface *surf = gbm_surface_create(dev, 1280, 720, fmt_xrgb8888, 1 | 4);
+              assert(surf != NULL);
+              assert(gbm_surface_has_free_buffers(surf) == 1);
+
+              struct gbm_bo *f1 = gbm_surface_lock_front_buffer(surf);
+              struct gbm_bo *f2 = gbm_surface_lock_front_buffer(surf);
+              struct gbm_bo *f3 = gbm_surface_lock_front_buffer(surf);
+              assert(f1 != NULL && f2 != NULL && f3 != NULL);
+              assert(gbm_surface_has_free_buffers(surf) == 0);
+
+              gbm_surface_release_buffer(surf, f1);
+              assert(gbm_surface_has_free_buffers(surf) == 1);
+              gbm_surface_destroy(surf);
+
+              /* 3. Test EGL Interposer entry point linkage */
+              (void)eglGetPlatformDisplay(0x31D7u, dev, NULL);
+
+              gbm_device_destroy(dev);
+              close(drm_fd);
+              printf("[PASS] C Wayland Compositor simulation against libgbm.so.1 succeeded!\n");
+              return 0;
+          }
+          EOF
+
+          gcc -Wall -Wextra -Werror "${C_TEST_DIR}/compositor_sim.c" \
+            -Ltarget/release -lgbm -Wl,-rpath,"$(pwd)/target/release" \
+            -o "${C_TEST_DIR}/compositor_sim"
+          "${C_TEST_DIR}/compositor_sim"
+          rm -rf "${C_TEST_DIR}"
