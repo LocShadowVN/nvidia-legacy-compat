@@ -1,6 +1,6 @@
 # nvidia-legacy-compat
 
->  **Languages:** **[English]** | **[Tiếng Việt](README-VN.md)**
+>  **Languages:** **English** | **[Tiếng Việt](README-VN.md)**
 
 An open-source compatibility layer and automation suite designed to revive and maintain end-of-life (EOL) proprietary NVIDIA GPU drivers (**470.xx**, **390.xx**, **340.xx**) on modern Linux distributions running **Linux Kernel 6.x+** and modern **Wayland Compositors** (Hyprland/wlroots, GNOME/Mutter, KDE/KWin).
 
