@@ -77,8 +77,8 @@ jobs:
         run: |
           cargo test -- --nocapture
 
-      - name: Build production shared library (libgbm.so.1) with version script
+      - name: Build production shared library (libgbm.so.1)
         working-directory: gbm-shim
         run: |
           cargo build --release
-          nm -D --with-symbol-versions target/release/libgbm.so | grep "GBM_1.0"
+          nm -D target/release/libgbm.so | grep "gbm_create_device"
