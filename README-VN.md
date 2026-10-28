@@ -1,6 +1,6 @@
 # nvidia-legacy-compat
 
-> **Ngôn ngữ / Languages:** **[Tiếng Việt]** | **[English](README.md)**
+> **Ngôn ngữ / Languages:** **Tiếng Việt** | **[English](README.md)**
 
 Dự án mã nguồn mở cung cấp lớp tương thích (compatibility layer) và công cụ tự động hóa nhằm hồi sinh và duy trì các nhánh driver GPU NVIDIA độc quyền đã ngừng hỗ trợ (**470.xx**, **390.xx**, **340.xx**) trên các bản phân phối Linux hiện đại sử dụng **Linux Kernel 6.x+** và các **Wayland Compositor** thế hệ mới (Hyprland/wlroots, GNOME/Mutter, KDE/KWin).
 
