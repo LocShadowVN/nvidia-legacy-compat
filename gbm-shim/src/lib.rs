@@ -1,3 +1,5 @@
+#![allow(non_camel_case_types, clippy::missing_safety_doc)]
+
 pub mod drm_ioctl;
 pub mod sync;
 
@@ -33,7 +35,7 @@ pub const GBM_BO_FORMAT_XRGB8888: u32 = 0;
 pub const GBM_BO_FORMAT_ARGB8888: u32 = 1;
 
 // GBM BO usage flags
-pub const GBM_BO_USE_SCANOUT: u32 = 1 << 0;
+pub const GBM_BO_USE_SCANOUT: u32 = 1;
 pub const GBM_BO_USE_CURSOR: u32 = 1 << 1;
 pub const GBM_BO_USE_RENDERING: u32 = 1 << 2;
 pub const GBM_BO_USE_WRITE: u32 = 1 << 3;
@@ -42,7 +44,7 @@ pub const GBM_BO_USE_PROTECTED: u32 = 1 << 5;
 pub const GBM_BO_USE_FRONT_RENDERING: u32 = 1 << 6;
 
 // GBM Transfer flags
-pub const GBM_BO_TRANSFER_READ: u32 = 1 << 0;
+pub const GBM_BO_TRANSFER_READ: u32 = 1;
 pub const GBM_BO_TRANSFER_WRITE: u32 = 1 << 1;
 pub const GBM_BO_TRANSFER_READ_WRITE: u32 = GBM_BO_TRANSFER_READ | GBM_BO_TRANSFER_WRITE;
 
@@ -190,9 +192,7 @@ fn select_modifier(modifiers: *const u64, count: u32) -> Option<u64> {
         return Some(DRM_FORMAT_MOD_LINEAR);
     }
     let slice = unsafe { std::slice::from_raw_parts(modifiers, count as usize) };
-    if slice.contains(&DRM_FORMAT_MOD_LINEAR) {
-        Some(DRM_FORMAT_MOD_LINEAR)
-    } else if slice.contains(&DRM_FORMAT_MOD_INVALID) {
+    if slice.contains(&DRM_FORMAT_MOD_LINEAR) || slice.contains(&DRM_FORMAT_MOD_INVALID) {
         Some(DRM_FORMAT_MOD_LINEAR)
     } else {
         None
@@ -245,7 +245,6 @@ pub unsafe extern "C" fn gbm_device_is_format_supported(
     if gbm.is_null() {
         return 0;
     }
-    // Legacy NVIDIA drivers không hỗ trợ protected content buffer
     if (flags & GBM_BO_USE_PROTECTED) != 0 {
         return 0;
     }
@@ -394,7 +393,6 @@ pub unsafe extern "C" fn gbm_bo_import(
                 None => return ptr::null_mut(),
             };
 
-            // Đợi DMA-BUF fence hoàn tất trước khi bàn giao cho Compositor
             let _ = FenceSyncManager::wait_dmabuf_ready(data.fd, DEFAULT_FENCE_TIMEOUT_MS);
 
             let (handle, is_mock, backing_fd) =
@@ -542,7 +540,7 @@ pub unsafe extern "C" fn gbm_bo_map(
     });
     *map_data = Box::into_raw(region).cast::<c_void>();
 
-    (base_ptr as *mut u8).add(byte_offset).cast::<c_void>()
+    base_ptr.cast::<u8>().add(byte_offset).cast::<c_void>()
 }
 
 #[no_mangle]
@@ -663,13 +661,11 @@ pub unsafe extern "C" fn gbm_bo_get_fd(bo: *mut gbm_bo) -> c_int {
     let bo_ref = &*bo;
     let dev = &*bo_ref.device;
 
-    // Theo chuẩn Mesa GBM, mỗi lần gọi gbm_bo_get_fd() trả về một FD mới mà caller chịu trách nhiệm close()
     let fd = match export_prime_fd(dev.drm_fd, &bo_ref.alloc) {
         Ok(fd) => fd,
         Err(_) => return -1,
     };
 
-    // Đồng bộ fence ngay khi xuất DMA-BUF FD cho Wayland Compositor
     let _ = FenceSyncManager::wait_dmabuf_ready(fd, DEFAULT_FENCE_TIMEOUT_MS);
 
     if let Ok(mut cached) = bo_ref.cached_dmabuf_fd.lock() {
@@ -760,8 +756,8 @@ pub unsafe extern "C" fn gbm_bo_destroy(bo: *mut gbm_bo) {
         }
     }
 
-    let boxed_bo = Box::from_raw(bo);
-    if let Ok(mut cached) = boxed_bo.cached_dmabuf_fd.lock() {
+    let mut boxed_bo = Box::from_raw(bo);
+    if let Ok(cached) = boxed_bo.cached_dmabuf_fd.get_mut() {
         if let Some(fd) = cached.take() {
             libc::close(fd);
         }
@@ -793,7 +789,7 @@ pub unsafe extern "C" fn gbm_surface_create(
         return ptr::null_mut();
     }
 
-    let mut slots = Vec::with_capacity(SURFACE_BUFFER_COUNT);
+    let mut slots: Vec<SurfaceSlot> = Vec::with_capacity(SURFACE_BUFFER_COUNT);
     for _ in 0..SURFACE_BUFFER_COUNT {
         let bo = gbm_bo_create(gbm, width, height, norm_fmt, flags);
         if bo.is_null() {
@@ -873,7 +869,6 @@ pub unsafe extern "C" fn gbm_surface_lock_front_buffer(surface: *mut gbm_surface
 
     for slot in slots.iter_mut() {
         if slot.state == SlotState::Free {
-            // Đồng bộ hàng rào DMA-BUF trước khi khóa front buffer cho Compositor scanout
             if let Ok(cached_fd_guard) = (*slot.bo).cached_dmabuf_fd.lock() {
                 if let Some(fd) = *cached_fd_guard {
                     let _ = FenceSyncManager::wait_dmabuf_ready(fd, DEFAULT_FENCE_TIMEOUT_MS);
@@ -926,14 +921,15 @@ pub unsafe extern "C" fn gbm_surface_destroy(surface: *mut gbm_surface) {
     if surface.is_null() {
         return;
     }
-    let boxed_surface = Box::from_raw(surface);
-    if let Ok(mut slots) = boxed_surface.slots.lock() {
+    let mut boxed_surface = Box::from_raw(surface);
+    if let Ok(slots) = boxed_surface.slots.get_mut() {
         for slot in slots.drain(..) {
             if !slot.bo.is_null() {
                 gbm_bo_destroy(slot.bo);
             }
         }
     }
+    drop(boxed_surface);
 }
 
 // ============================================================================
@@ -981,11 +977,9 @@ mod tests {
             assert_eq!(gbm_bo_get_plane_count(bo), 1);
             assert_eq!(gbm_bo_get_modifier(bo), DRM_FORMAT_MOD_LINEAR);
 
-            // Kiểm tra xuất DMA-BUF FD qua PRIME
             let dmabuf_fd = gbm_bo_get_fd(bo);
             assert!(dmabuf_fd >= 0);
 
-            // Kiểm tra ánh xạ bộ nhớ (gbm_bo_map / gbm_bo_unmap)
             let mut stride: u32 = 0;
             let mut map_data: *mut c_void = ptr::null_mut();
             let mapped_ptr = gbm_bo_map(
@@ -1001,7 +995,6 @@ mod tests {
             assert!(!mapped_ptr.is_null());
             assert!(!map_data.is_null());
 
-            // Ghi thử một pixel ARGB8888 và đọc lại
             let pixel_ptr = mapped_ptr.cast::<u32>();
             *pixel_ptr = 0xFF11_2233;
             assert_eq!(*pixel_ptr, 0xFF11_2233);
@@ -1043,11 +1036,9 @@ mod tests {
             assert!(!bo2.is_null());
             assert!(!bo3.is_null());
 
-            // Đã khóa đủ 3 buffer trong triple-buffering pool
             assert_eq!(gbm_surface_has_free_buffers(surface), 0);
             assert!(gbm_surface_lock_front_buffer(surface).is_null());
 
-            // Gắn user_data vào bo1
             DESTRUCTOR_CALLED.store(false, Ordering::SeqCst);
             gbm_bo_set_user_data(
                 bo1,
@@ -1057,7 +1048,6 @@ mod tests {
                 Some(on_bo_destroy),
             );
 
-            // Giải phóng bo1 về lại pool
             gbm_surface_release_buffer(surface, bo1);
             assert_eq!(gbm_surface_has_free_buffers(surface), 1);
 
@@ -1072,7 +1062,6 @@ mod tests {
     #[test]
     fn test_fence_sync_polling_with_eventfd() {
         unsafe {
-            // Tạo eventfd đóng vai trò sync_file được báo hiệu sẵn (counter = 1)
             let efd = libc::eventfd(1, libc::EFD_CLOEXEC | libc::EFD_NONBLOCK);
             assert!(efd >= 0);
             let res = FenceSyncManager::poll_sync_fd(efd, 100);
