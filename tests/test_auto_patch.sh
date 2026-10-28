@@ -21,7 +21,6 @@ static inline void nv_vm_flags_set(struct vm_area_struct *vma, vm_flags_t flags)
 {
     vma->vm_flags |= flags;
 }
-
 static inline void nv_vm_flags_clear(struct vm_area_struct *vma, vm_flags_t flags)
 {
     vma->vm_flags &= ~flags;
@@ -52,7 +51,6 @@ EOF
 {
     return pin_user_pages(start, nr_pages, gup_flags, pages, vmas);
 }
-
                                        struct vm_area_struct **vmas,
                                        int *locked)
 {
@@ -74,14 +72,12 @@ static void nv_drm_output_poll_changed(struct drm_device *dev)
 {
     /* Maintained for < 6.12 compatibility */
 }
-
 static const struct drm_mode_config_funcs nv_mode_config_funcs = {
     .fb_create = nv_drm_internal_framebuffer_create,
     .atomic_check = nv_drm_atomic_check,
     .atomic_commit = nv_drm_atomic_commit,
     .output_poll_changed = nv_drm_output_poll_changed,
 };
-
 static struct drm_driver nv_drm_driver = {
     .driver_features        = DRIVER_GEM | DRIVER_RENDER,
     .ioctls                 = nv_drm_ioctls,
