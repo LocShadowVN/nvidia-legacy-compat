@@ -1,6 +1,7 @@
 #![allow(non_camel_case_types, clippy::missing_safety_doc)]
 
 pub mod drm_ioctl;
+pub mod egl_shim;
 pub mod sync;
 
 use crate::drm_ioctl::{
@@ -384,7 +385,7 @@ pub unsafe extern "C" fn gbm_bo_import(
     match import_type {
         GBM_BO_IMPORT_FD => {
             let data = &*(buffer as *const gbm_import_fd_data);
-            if data.fd < 0 || data.width == 0 || data.height == 0 {
+            if data.fd < 0 || data.width == 0 || data.height == 0 || data.stride == 0 {
                 return ptr::null_mut();
             }
             let norm_fmt = normalize_format(data.format);
@@ -430,7 +431,13 @@ pub unsafe extern "C" fn gbm_bo_import(
         }
         GBM_BO_IMPORT_FD_MODIFIER => {
             let data = &*(buffer as *const gbm_import_fd_modifier_data);
-            if data.num_fds == 0 || data.fds[0] < 0 || data.width == 0 || data.height == 0 {
+            if data.num_fds == 0
+                || data.fds[0] < 0
+                || data.width == 0
+                || data.height == 0
+                || data.strides[0] <= 0
+                || data.offsets[0] < 0
+            {
                 return ptr::null_mut();
             }
             let norm_fmt = normalize_format(data.format);
@@ -494,7 +501,7 @@ pub unsafe extern "C" fn gbm_bo_map(
     stride: *mut u32,
     map_data: *mut *mut c_void,
 ) -> *mut c_void {
-    if bo.is_null() || stride.is_null() || map_data.is_null() {
+    if bo.is_null() || stride.is_null() || map_data.is_null() || width == 0 || height == 0 {
         return ptr::null_mut();
     }
     let bo_ref = &*bo;
@@ -938,6 +945,10 @@ pub unsafe extern "C" fn gbm_surface_destroy(surface: *mut gbm_surface) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::egl_shim::{
+        translate_gbm_to_device_display, EGLBoolean, EGLDeviceEXT, EGLDisplay, EGLenum, EGLint,
+        EGL_NO_DISPLAY, EGL_PLATFORM_DEVICE_EXT, EGL_PLATFORM_GBM_KHR, EGL_TRUE,
+    };
     use std::sync::atomic::{AtomicBool, Ordering};
 
     fn create_mock_drm_fd() -> c_int {
@@ -1067,6 +1078,50 @@ mod tests {
             let res = FenceSyncManager::poll_sync_fd(efd, 100);
             assert!(res.is_ok());
             libc::close(efd);
+        }
+    }
+
+    unsafe extern "C" fn mock_nvidia_470_get_platform_display_ext(
+        platform: EGLenum,
+        native_display: *mut c_void,
+        _attrib_list: *const EGLint,
+    ) -> EGLDisplay {
+        // Giả lập hành vi thật của libEGL_nvidia.so.0 bản 470.xx:
+        // Từ chối EGL_PLATFORM_GBM_KHR, chỉ chấp nhận EGL_PLATFORM_DEVICE_EXT
+        if platform == EGL_PLATFORM_GBM_KHR {
+            return EGL_NO_DISPLAY;
+        }
+        if platform == EGL_PLATFORM_DEVICE_EXT && !native_display.is_null() {
+            return 0xDEAD_BEEFusize as EGLDisplay;
+        }
+        EGL_NO_DISPLAY
+    }
+
+    unsafe extern "C" fn mock_nvidia_470_query_devices_ext(
+        max_devices: EGLint,
+        devices: *mut EGLDeviceEXT,
+        num_devices: *mut EGLint,
+    ) -> EGLBoolean {
+        if max_devices > 0 && !devices.is_null() && !num_devices.is_null() {
+            *devices = 0xCAFE_BABEusize as EGLDeviceEXT;
+            *num_devices = 1;
+            return EGL_TRUE;
+        }
+        0
+    }
+
+    #[test]
+    fn test_egl_gbm_to_device_ext_interposer() {
+        unsafe {
+            let dummy_gbm_dev = 0x1234usize as *mut c_void;
+            let dpy = translate_gbm_to_device_display(
+                EGL_PLATFORM_GBM_KHR,
+                dummy_gbm_dev,
+                ptr::null(),
+                mock_nvidia_470_get_platform_display_ext,
+                Some(mock_nvidia_470_query_devices_ext),
+            );
+            assert_eq!(dpy, 0xDEAD_BEEFusize as EGLDisplay);
         }
     }
 }
