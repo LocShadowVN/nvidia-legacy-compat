@@ -1,6 +1,6 @@
 --- a/kernel/nvidia/os-mlock.c
 +++ b/kernel/nvidia/os-mlock.c
-@@ -28,6 +28,31 @@
+@@ -1,6 +1,25 @@
  static inline int nv_follow_pfn(struct vm_area_struct *vma,
                                  unsigned long address,
                                  unsigned long *pfn)
@@ -28,16 +28,14 @@
  }
 --- a/kernel/nvidia-drm/nvidia-drm-drv.c
 +++ b/kernel/nvidia-drm/nvidia-drm-drv.c
-@@ -65,6 +65,10 @@
+@@ -1,18 +1,23 @@
 +#ifndef DRM_UNLOCKED
 +#define DRM_UNLOCKED 0
 +#endif
-+
  static void nv_drm_output_poll_changed(struct drm_device *dev)
  {
      /* Maintained for < 6.12 compatibility */
  }
- 
  static const struct drm_mode_config_funcs nv_mode_config_funcs = {
      .fb_create = nv_drm_internal_framebuffer_create,
      .atomic_check = nv_drm_atomic_check,
@@ -46,7 +44,6 @@
      .output_poll_changed = nv_drm_output_poll_changed,
 +#endif
  };
- 
  static struct drm_driver nv_drm_driver = {
 -    .driver_features        = DRIVER_GEM | DRIVER_RENDER,
 +    .driver_features        = DRIVER_GEM | DRIVER_RENDER | DRIVER_MODESET | DRIVER_ATOMIC,
