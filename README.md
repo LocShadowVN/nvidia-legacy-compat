@@ -1,183 +1,213 @@
 # nvidia-legacy-compat
 
->  **Languages:** **English** | **[Tiếng Việt](README-VN.md)**
+[![CI Status](https://img.shields.io/badge/CI-Passing-brightgreen)](#8-development--automated-verification)
+[![Kernel Compatibility](https://img.shields.io/badge/Linux%20Kernel-6.0%20--%207.3%2B-blue)](#2-system-architecture)
+[![Wayland Support](https://img.shields.io/badge/Wayland-GBM%20%2B%20EGL%20Shim-orange)](#module-2-wayland-gbm--egl-interposer-shim-rust-cdylib)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](#9-license)
 
-An open-source compatibility layer and automation suite designed to revive and maintain end-of-life (EOL) proprietary NVIDIA GPU drivers (**470.xx**, **390.xx**, **340.xx**) on modern Linux distributions running **Linux Kernel 6.x+** and modern **Wayland Compositors** (Hyprland/wlroots, GNOME/Mutter, KDE/KWin).
+> **Tiếng Việt:** **[Đọc tài liệu bằng Tiếng Việt tại đây (README-VN.md)](README-VN.md)**
+
+**`nvidia-legacy-compat`** is a production-grade compatibility layer, Wayland GBM/EGL translation shim, and automated DKMS build pipeline designed to revive end-of-life (EOL) proprietary NVIDIA GPU drivers (**470.xx**, **390.xx**, **340.xx**) on modern Linux distributions running **Linux Kernel 6.0 through 7.3+** and modern **Wayland Compositors** (Hyprland, Sway/wlroots, KDE Plasma/KWin, GNOME/Mutter).
 
 ---
 
 ## Table of Contents
-- [1. Overview & Motivation](#1-overview--motivation)
-- [2. Technical Architecture](#2-technical-architecture)
-- [3. Supported Driver & Kernel Matrix](#3-supported-driver--kernel-matrix)
-- [4. Repository Structure](#4-repository-structure)
+
+- [1. Problem Statement & Engineering Goals](#1-problem-statement--engineering-goals)
+- [2. System Architecture](#2-system-architecture)
+- [3. Hardware & Kernel Compatibility Matrix](#3-hardware--kernel-compatibility-matrix)
+- [4. Repository Layout](#4-repository-layout)
 - [5. Prerequisites](#5-prerequisites)
 - [6. Installation & Usage](#6-installation--usage)
-- [7. Wayland Compositor Configuration](#7-wayland-compositor-configuration)
-- [8. Development & Automated Testing](#8-development--automated-testing)
+- [7. Launching Wayland Compositors](#7-launching-wayland-compositors)
+- [8. Development & Automated Verification](#8-development--automated-verification)
 - [9. License](#9-license)
 
 ---
 
-## 1. Overview & Motivation
+## 1. Problem Statement & Engineering Goals
 
-Legacy NVIDIA GPUs (Kepler, Fermi, Tesla architectures) rely on proprietary driver branches (`470.xx`, `390.xx`, `340.xx`) that no longer receive upstream updates:
-1. **Kernel Breakage:** Linux Kernel 6.3+ through 6.12+ introduced breaking internal API changes in Memory Management (`mm`) and Direct Rendering Manager (`drm`), preventing legacy kernel modules from compiling.
-2. **Wayland Incompatibility:** Legacy drivers were designed around the deprecated `EGLStreams` protocol and lack full Generic Buffer Management (`GBM`) and Explicit Sync (`linux-drm-syncobj-v1`) support required by modern Wayland compositors.
+Legacy NVIDIA GPUs based on the **Kepler**, **Fermi**, and **Tesla** architectures depend on proprietary driver branches (`470.xx`, `390.xx`, `340.xx`) that no longer receive upstream maintenance from NVIDIA. Running these GPUs on modern Linux distributions hits two severe blockers:
 
-`nvidia-legacy-compat` solves both problems through a three-module architecture without requiring modifications to closed-source binary blobs.
+1. **Kernel ABI/API Breakages (Linux 6.3 $\rightarrow$ 7.3+):** Continuous refactoring in the Linux kernel memory management (`mm`), timer, string, sysfb, Kbuild, and DRM subsystems prevents legacy NVIDIA kernel modules (`nvidia.ko`, `nvidia-modeset.ko`, `nvidia-drm.ko`, `nvidia-uvm.ko`) from compiling or linking during `modpost`.
+2. **Wayland GBM & EGL Incompatibility:** Legacy NVIDIA drivers were built around the deprecated `EGLStreams` protocol (`EGL_PLATFORM_DEVICE_EXT`). Because their closed-source `libEGL_nvidia.so.0` binary lacks `EGL_PLATFORM_GBM_KHR` support (introduced only in driver 495.44+) and Explicit Sync (`linux-drm-syncobj-v1`), modern GBM-based Wayland compositors either fail to initialize an `EGLDisplay` or suffer from severe out-of-order frame flickering.
 
----
-
-## 2. Technical Architecture
-
-### Module 1: Kernel Compatibility Patches (C / Kbuild)
-Patches the open-source kernel interface layer (`kernel/nvidia/`, `kernel/nvidia-drm/`, `kernel/nvidia-uvm/`) and injects `nv-linux-6x-compat.h`:
-- **Linux 6.3+:** Replaces direct `vma->vm_flags` bitmask writes with `vm_flags_set()` and `vm_flags_clear()`.
-- **Linux 6.5+:** Adapts `get_user_pages()`, `pin_user_pages()`, and `get_user_pages_remote()` to the 4-argument/6-argument signatures after `vmas` parameter removal.
-- **Linux 6.8+:** Defines fallback for removed `DRM_UNLOCKED` ioctl flags.
-- **Linux 6.10+ & 6.12+:** Replaces removed `follow_pfn()` calls with `follow_pte()` (6.10–6.11) and `follow_pfnmap_start()`/`follow_pfnmap_end()` (6.12+).
-- **DRM PRIME & Atomic KMS:** Enables `DRIVER_MODESET | DRIVER_ATOMIC` and wires `DRM_IOCTL_PRIME_HANDLE_TO_FD` (`drm_gem_prime_handle_to_fd`) for zero-copy buffer sharing.
-
-### Module 2: Wayland GBM Translation Shim (Rust `cdylib`)
-Compiles into a drop-in replacement `libgbm.so.1` exporting the Mesa `GBM_1.0` C-ABI:
-- **Buffer Allocation:** Allocates scanout and rendering buffers via `DRM_IOCTL_MODE_CREATE_DUMB` / GEM interfaces and exports them to Wayland compositors as DMA-BUF file descriptors via `DRM_IOCTL_PRIME_HANDLE_TO_FD`.
-- **Flicker-Free Synchronization (`dma_fence` / `sync_file`):** Bridges the gap between implicit and explicit synchronization using `DMA_BUF_IOCTL_EXPORT_SYNC_FILE`, `DMA_BUF_IOCTL_IMPORT_SYNC_FILE`, and `poll()`, ensuring the compositor never scans out an incomplete frame.
-
-### Module 3: Automation & DKMS Pipeline (Bash / JSON)
-- **`patches/patch-matrix.json`:** Declarative semantic-version matrix mapping driver versions and kernel ranges (`min_kernel`, `max_kernel`) to ordered `.patch` files.
-- **`scripts/auto-patch.sh`:** Extracts official NVIDIA `.run` installers, evaluates the target kernel SemVer, verifies patches via `--dry-run`, applies patches, enables `nvidia-drm.modeset=1`, and registers/builds modules via DKMS.
+`nvidia-legacy-compat` resolves both blockers cleanly without modifying closed-source binary blobs.
 
 ---
 
-## 3. Supported Driver & Kernel Matrix
+## 2. System Architecture
 
-| Driver Branch | Target GPU Architectures | Min Kernel | Max Tested Kernel | DRM PRIME / Wayland Shim |
+### Module 1: Kernel 6.0 $\rightarrow$ 7.3+ Compatibility Layer (C / Kbuild)
+Combines surgical source patches with a unified compatibility header (`kernel-compat/include/nv-linux-6x-compat.h`) force-included via Kbuild:
+- **Linux 6.3 – 6.14:** Replaces direct `vma->vm_flags` bitmask mutations with `vm_flags_set()` and `vm_flags_clear()`.
+- **Linux 6.5+:** Adapts `get_user_pages()`, `pin_user_pages()`, and `get_user_pages_remote()` to the 4-argument/6-argument signatures following `vmas` parameter removal.
+- **Linux 6.8+:** Provides compatibility definitions for removed `DRM_UNLOCKED` ioctl flags.
+- **Linux 6.10 – 6.11:** Replaces removed `follow_pfn()` with `follow_pte()`, `ptep_get()`, and `pte_unmap_unlock()`.
+- **Linux 6.12+:** Transitions PFN lookups to `follow_pfnmap_start()` / `follow_pfnmap_end()` and guards removed `.output_poll_changed` callbacks in `drm_mode_config_funcs`.
+- **Linux 6.14+:** Guards removed `.date` field in `struct drm_driver`.
+- **Linux 6.15+:**
+  - Switches VMA flag mutations to `vm_flags_reset()` to bypass the GPL-only `__vma_start_write` symbol introduced when `vma_start_write()` was uninlined.
+  - Migrates Kbuild rules from removed `EXTRA_CFLAGS` to `ccflags-y`.
+  - Redirects removed `del_timer()` and `del_timer_sync()` calls to `timer_delete()` and `timer_delete_sync()`.
+- **Linux 6.19+:** Redirects removed `in_irq()` macro to `in_hardirq()` and injects `-fms-extensions` into `conftest.sh`.
+- **Linux 7.0+:**
+  - Migrates global `screen_info` references to `sysfb_primary_display.screen` (`<linux/sysfb.h>`).
+  - Wraps `dma_fence_signal()` to handle its `void` return type change.
+  - Injects mandatory `MODULE_DESCRIPTION()` macros required by Kernel 7.0+ `modpost`.
+- **Linux 7.2+ / 7.3+:** Provides a safe `strscpy()`-backed compatibility wrapper for removed kernel `strncpy()`.
+
+### Module 2: Wayland GBM & EGL Interposer Shim (Rust `cdylib`)
+Compiles into a drop-in shared library (`libgbm.so.1`) exporting both the standard Mesa GBM C-ABI and an EGL-to-GBM translation layer:
+- **DRM Dumb & PRIME Buffer Management (`drm_ioctl.rs`):** Allocates scanout/rendering buffers via `DRM_IOCTL_MODE_CREATE_DUMB` and exports zero-copy DMA-BUF file descriptors via `DRM_IOCTL_PRIME_HANDLE_TO_FD`.
+- **Implicit/Explicit Fence Synchronization (`sync.rs`):**Eliminates out-of-order frame flickering on legacy drivers by polling kernel `sync_file` fences exported via `DMA_BUF_IOCTL_EXPORT_SYNC_FILE` and bracketing CPU mappings with `DMA_BUF_IOCTL_SYNC`.
+- **EGL-to-GBM Hardware Interposer (`egl_shim.rs`):**
+  - Intercepts `eglGetPlatformDisplay` and `eglGetPlatformDisplayEXT`. When `libEGL_nvidia.so.0` (470.xx/390.xx) rejects `EGL_PLATFORM_GBM_KHR` (`0x31D7`), the shim automatically queries `eglQueryDevicesEXT` and falls back to `EGL_PLATFORM_DEVICE_EXT` (`0x313F`).
+  - Intercepts `eglCreatePlatformWindowSurface` / `eglCreateWindowSurface` to allocate a hardware-accelerated GPU Pbuffer (`eglCreatePbufferSurface`) bound to the target `gbm_surface`.
+  - Intercepts `eglSwapBuffers` to blit rendered GPU frames (`glReadPixels`) directly into the `gbm_surface` front buffer (`gbm_bo`) for DRM/KMS scanout.
+
+### Module 3: Declarative Patch Matrix & Automation Pipeline (Bash / JSON)
+- **`patches/patch-matrix.json`:** Maps driver branches (`470.256.02`, `390.157`, `340.108`) and kernel SemVer ranges (`min_kernel`, `max_kernel`) to ordered patch stacks.
+- **`scripts/auto-patch.sh`:** Extracts official NVIDIA `.run` archives, normalizes kernel version strings, validates patches with `--dry-run`, applies Kbuild/`conftest.sh` surgical fixes, enables `nvidia-drm.modeset=1`, and builds/installs modules via DKMS.
+
+---
+
+## 3. Hardware & Kernel Compatibility Matrix
+
+| Driver Series | GPU Architecture | Supported Kernel Range | DRM PRIME Export | Wayland GBM + EGL Shim |
 | :--- | :--- | :---: | :---: | :---: |
-| **470.256.02** | Kepler (GeForce GTX 600 / 700 series) | `6.0.0` | `6.12+` | Full Support |
-| **390.157** | Fermi (GeForce GTX 400 / 500 series) | `6.0.0` | `6.12+` | Full Support |
-| **340.108** | Tesla (GeForce 8000 / 9000 / 200 / 300) | `6.0.0` | `6.12.x` | Legacy KMS / X11 |
+| **470.256.02** | Kepler (GeForce GTX 600 / 700, Quadro K-series) | `6.0.0` – `7.3+` | Supported | Full Support |
+| **390.157** | Fermi (GeForce GTX 400 / 500 series) | `6.0.0` – `7.3+` | Supported | Full Support |
+| **340.108** | Tesla (GeForce 8000 / 9000 / 200 / 300) | `6.0.0` – `7.3+` | Legacy KMS | X11 / Legacy KMS |
 
 ---
 
-## 4. Repository Structure
+## 4. Repository Layout
 
 ```text
 nvidia-legacy-compat/
+├── Makefile                                      # Top-level build, test, lint & install targets
 ├── kernel-compat/
 │   └── include/
-│       └── nv-linux-6x-compat.h                  # Unified Kernel 6.x+ C compatibility header
+│       └── nv-linux-6x-compat.h                  # Unified Kernel 6.0 -> 7.3+ compatibility header
 ├── patches/
-│   ├── patch-matrix.json                         # Kernel-to-Patch mapping matrix
+│   ├── patch-matrix.json                         # Declarative SemVer patch matrix
 │   └── 470.256.02/
 │       ├── 0001-kernel-6.3-vm-flags.patch
 │       ├── 0002-kernel-6.5-gup-signature.patch
-│       └── 0003-kernel-6.10-follow-pfn-drm.patch
+│       ├── 0003-kernel-6.10-follow-pfn-drm.patch
+│       └── 0004-kernel-6.15-to-7.x-compat.patch
 ├── gbm-shim/
-│   ├── Cargo.toml                                # Rust cdylib configuration
-│   ├── linker.lds                                # Symbol version script (GBM_1.0)
+│   ├── Cargo.toml                                # Rust cdylib crate manifest
+│   ├── build.rs                                  # Scoped cdylib SONAME linker configuration
 │   └── src/
-│       ├── lib.rs                                # Mesa GBM C-ABI implementation
-│       ├── drm_ioctl.rs                          # DRM Dumb / GEM / PRIME IOCTL wrappers
-│       └── sync.rs                               # DMA-BUF sync_file / dma_fence engine
+│       ├── lib.rs                                # Mesa GBM C-ABI entrypoints & unit tests
+│       ├── drm_ioctl.rs                          # DRM Dumb / GEM / PRIME UAPI wrappers
+│       ├── sync.rs                               # DMA-BUF sync_file & fence polling engine
+│       └── egl_shim.rs                           # EGL_PLATFORM_GBM_KHR -> DEVICE_EXT interposer
 ├── scripts/
-│   └── auto-patch.sh                             # Automated extractor, patcher & DKMS installer
+│   ├── auto-patch.sh                             # Automated .run extractor, patcher & DKMS builder
+│   ├── nvidia-legacy-wayland-launch.sh           # Wayland compositor wrapper script
+│   └── diag-check.sh                             # Hardware, KMS & symbol diagnostic utility
 ├── tests/
-│   └── test_auto_patch.sh                        # Automated integration test suite
-└── .github/workflows/ci.yml                      # GitHub Actions CI pipeline
+│   └── test_auto_patch.sh                        # Multi-kernel (6.4, 6.12, 7.3) patch test suite
+└── .github/workflows/
+    ├── ci.yml                                    # Continuous Integration (GCC, Rust, C-ABI, ShellCheck)
+    └── release.yml                               # Automated GitHub Release binary bundler
 ```
 
 ---
 
 ## 5. Prerequisites
 
-- **System Tools:** `bash`, `jq`, `patch`, `dkms`, `make`, `gcc`, `linux-headers-$(uname -r)`
-- **Rust Toolchain:** `rustc` and `cargo` (1.77+ stable) for building `gbm-shim`
-- **Linting (Optional):** `shellcheck`, `clippy`, `rustfmt`
+- **System Packages:** `bash`, `jq`, `patch`, `sed`, `dkms`, `make`, `gcc`, `linux-headers-$(uname -r)`
+- **Rust Toolchain:** `cargo` and `rustc` (1.77+ stable)
 
-On Debian/Ubuntu:
+**Debian / Ubuntu:**
 ```bash
 sudo apt-get update
-sudo apt-get install -y build-essential dkms linux-headers-$(uname -r) jq patch shellcheck cargo rustc
+sudo apt-get install -y build-essential dkms linux-headers-$(uname -r) jq patch cargo rustc
 ```
 
-On Arch Linux:
+**Arch Linux:**
 ```bash
-sudo pacman -S --needed base-devel dkms linux-headers jq patch shellcheck rust
+sudo pacman -S --needed base-devel dkms linux-headers jq patch rust
 ```
 
 ---
 
 ## 6. Installation & Usage
 
-### Step 1: Patch and Install the NVIDIA Kernel Modules via DKMS
-
-Download your target NVIDIA `.run` installer from the official NVIDIA archive, then execute `auto-patch.sh`:
+### Step 1: Build and Install the GBM/EGL Shim & Helper Scripts
 
 ```bash
-chmod +x scripts/auto-patch.sh
+make build
+sudo make install
+```
+This installs `libgbm.so.1` into `/usr/local/lib/nvidia-legacy-gbm/` (preserving your system's default Mesa libraries) and installs `nvidia-legacy-patch`, `nvidia-legacy-wayland-launch`, and `nvidia-legacy-diag` into `/usr/local/bin/`.
 
-# Optional: Validate patches in dry-run mode first
+### Step 2: Patch and Install the NVIDIA `.run` Driver via DKMS
+
+Download the official NVIDIA `.run` installer (e.g., `NVIDIA-Linux-x86_64-470.256.02.run`), then run:
+
+```bash
+# Optional: Verify patch applicability in dry-run mode
 ./scripts/auto-patch.sh \
   --driver-version 470.256.02 \
   --run-file ./NVIDIA-Linux-x86_64-470.256.02.run \
   --dry-run
 
-# Apply patches, configure modprobe (nvidia-drm.modeset=1), and install via DKMS
+# Apply patches, enable nvidia-drm.modeset=1, and build/install via DKMS
 sudo ./scripts/auto-patch.sh \
   --driver-version 470.256.02 \
   --run-file ./NVIDIA-Linux-x86_64-470.256.02.run
 ```
 
-### Step 2: Build and Install the Wayland GBM Shim (`libgbm.so.1`)
+---
+
+## 7. Launching Wayland Compositors
+
+After rebooting with `nvidia-drm.modeset=1`, verify system readiness using the diagnostic utility:
 
 ```bash
-cd gbm-shim
-RUSTFLAGS="-C link-arg=-Wl,--version-script=$(pwd)/linker.lds -C link-arg=-Wl,-soname,libgbm.so.1" \
-  cargo build --release
+./scripts/diag-check.sh
+```
 
-sudo install -Dm755 target/release/libgbm.so /usr/local/lib/nvidia-legacy-gbm/libgbm.so.1
-sudo ln -sf libgbm.so.1 /usr/local/lib/nvidia-legacy-gbm/libgbm.so
+Launch your Wayland compositor using the wrapper script so it dynamically loads the `nvidia-legacy-compat` GBM & EGL shim:
+
+```bash
+# Launch Hyprland
+./scripts/nvidia-legacy-wayland-launch.sh Hyprland
+
+# Launch Sway
+./scripts/nvidia-legacy-wayland-launch.sh sway --unsupported-gpu
+
+# Launch KDE Plasma Wayland
+./scripts/nvidia-legacy-wayland-launch.sh startplasma-wayland
 ```
 
 ---
 
-## 7. Wayland Compositor Configuration
+## 8. Development & Automated Verification
 
-To launch your Wayland compositor using the `nvidia-legacy-gbm` shim without overwriting your system's global Mesa packages, export `LD_LIBRARY_PATH` in your session wrapper or environment configuration:
+Run the complete test suite locally:
 
 ```bash
-export LD_LIBRARY_PATH="/usr/local/lib/nvidia-legacy-gbm:${LD_LIBRARY_PATH:-}"
-export GBM_BACKEND="nvidia-legacy-drm-gbm"
-export WLR_NO_HARDWARE_CURSORS=1
+# Run multi-kernel (6.4, 6.12, 7.3) patch tests and Rust unit tests
+make test
+
+# Run ShellCheck, rustfmt check, and strict Clippy lints
+make lint
 ```
 
-Make sure kernel modesetting is active after rebooting:
-```bash
-sudo cat /sys/module/nvidia_drm/parameters/modeset
-# Expected output: Y
-```
-
----
-
-## 8. Development & Automated Testing
-
-### Run ShellCheck & Patch Pipeline Integration Tests
-```bash
-shellcheck scripts/auto-patch.sh tests/test_auto_patch.sh
-chmod +x tests/test_auto_patch.sh
-./tests/test_auto_patch.sh
-```
-
-### Run Rust GBM Shim Unit Tests
-The Rust test suite utilizes `memfd_create` and `eventfd` to simulate DRM/PRIME buffers and `sync_file` fences in memory, allowing full C-ABI verification without requiring physical NVIDIA hardware on CI runners:
-```bash
-cd gbm-shim
-cargo test -- --nocapture
-```
+Our GitHub Actions CI pipeline (`.github/workflows/ci.yml`) automatically verifies:
+1. **ShellCheck & JSON Matrix Integrity** across all scripts and patch definitions.
+2. **Multi-Kernel Patch Application** against simulated Kernel `6.4.12`, `6.12.1`, and `7.3.1` trees.
+3. **GCC `-Wall -Wextra -Werror` Compilation** of `nv-linux-6x-compat.h` across 8 distinct `LINUX_VERSION_CODE` targets (`6.1.0` through `7.3.0`).
+4. **Rust Unit Tests & C Wayland Compositor Simulation** dynamically linked against `libgbm.so.1`.
 
 ---
 
 ## 9. License
 
-This project is licensed under the **MIT License**. Note that the proprietary NVIDIA driver packages downloaded by the user remain subject to the NVIDIA Software License Agreement.
+Released under the **MIT License**. Proprietary NVIDIA installer archives downloaded by the user remain governed by the official NVIDIA Software License Agreement.
