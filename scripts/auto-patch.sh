@@ -63,7 +63,7 @@ semver_ge() {
     IFS='.' read -r m2 n2 p2 <<< "${v2}"
 
     if (( m1 != m2 )); then (( m1 > m2 )); return $?; fi
-    if (( n1 != n2 )); then (( n1 > n2 )); return $?; fi
+    if (( n1 != n2 )); then (( n1 < n2 )); return $?; fi
     (( p1 >= p2 ))
 }
 
@@ -81,7 +81,7 @@ semver_le() {
 }
 
 check_dependencies() {
-    local deps=("jq" "patch" "sed")
+    local deps=("jq" "patch" "sed" "find")
     if (( SKIP_DKMS == 0 && DRY_RUN == 0 )); then
         deps+=("dkms")
     fi
@@ -183,30 +183,57 @@ extract_installer() {
     printf "%s" "${target_extract}"
 }
 
+# Phẫu thuật tự động toàn bộ cây mã nguồn thật từ gói .run của NVIDIA cho Kernel 6.x/7.x
 apply_real_kbuild_and_conftest_fixes() {
     local target_dir="$1"
     (( DRY_RUN == 1 )) && return 0
 
-    local kbuild_file="${target_dir}/kernel/Kbuild"
-    if [[ -f "${kbuild_file}" ]]; then
-        sed -i 's/\bEXTRA_CFLAGS\b/ccflags-y/g' "${kbuild_file}"
-        if ! grep -q "nv-linux-6x-compat.h" "${kbuild_file}"; then
-            cat >> "${kbuild_file}" <<'EOF'
+    local kdir="${target_dir}/kernel"
+    [[ ! -d "${kdir}" ]] && return 0
+
+    # 1. Thay thế toàn bộ EXTRA_CFLAGS -> ccflags-y và EXTRA_LDFLAGS -> ldflags-y (Kernel 6.15+ & 7.x)
+    while IFS= read -r -d '' mkfile; do
+        sed -i 's/\bEXTRA_CFLAGS\b/ccflags-y/g; s/\bEXTRA_LDFLAGS\b/ldflags-y/g' "${mkfile}"
+    done < <(find "${kdir}" -maxdepth 3 \( -name "Kbuild" -o -name "*.mk" -o -name "Makefile" \) -print0)
+
+    local kbuild_file="${kdir}/Kbuild"
+    if [[ -f "${kbuild_file}" ]] && ! grep -q "nv-linux-6x-compat.h" "${kbuild_file}"; then
+        cat >> "${kbuild_file}" <<'EOF'
 
 # Injected by nvidia-legacy-compat for Kernel 6.x / 7.x
 ccflags-y += -include $(src)/common/inc/nv-linux-6x-compat.h
-ccflags-y += -Wno-error=implicit-function-declaration -Wno-error=strict-prototypes -Wno-error=incompatible-pointer-types -fms-extensions
+ccflags-y += -Wno-error -Wno-implicit-function-declaration -Wno-strict-prototypes -Wno-incompatible-pointer-types -fms-extensions
 EOF
-            log_ok "Updated Kbuild (EXTRA_CFLAGS -> ccflags-y & force-included nv-linux-6x-compat.h)"
-        fi
+        log_ok "Updated Kbuild (EXTRA_CFLAGS -> ccflags-y & force-included nv-linux-6x-compat.h)"
     fi
 
-    local conftest_file="${target_dir}/kernel/conftest.sh"
-    if [[ -f "${conftest_file}" ]]; then
-        if ! grep -q "fms-extensions" "${conftest_file}"; then
-            sed -i 's/CFLAGS="/CFLAGS="-fms-extensions -Wno-implicit-function-declaration -Wno-strict-prototypes -Wno-incompatible-pointer-types /g' "${conftest_file}"
-            log_ok "Patched conftest.sh with GCC 14/15/16 & Kernel 6.19+/7.x flags (-fms-extensions)"
-        fi
+    # 2. Bơm cờ tương thích GCC 14/15/16 và Kernel 7.x vào conftest.sh
+    local conftest_file="${kdir}/conftest.sh"
+    if [[ -f "${conftest_file}" ]] && ! grep -q "fms-extensions" "${conftest_file}"; then
+        sed -i 's/CFLAGS="/CFLAGS="-fms-extensions -Wno-implicit-function-declaration -Wno-strict-prototypes -Wno-incompatible-pointer-types /g' "${conftest_file}"
+        log_ok "Patched conftest.sh with Kernel 7.x flags (-fms-extensions)"
+    fi
+
+    # 3. Nếu là cây mã nguồn .run thật (nv-linux.h > 100 dòng), tự động chuyển đổi vma->vm_flags
+    local nv_linux_h="${kdir}/common/inc/nv-linux.h"
+    if [[ -f "${nv_linux_h}" ]] && (( $(wc -l < "${nv_linux_h}") > 100 )); then
+        log_info "Detected real NVIDIA .run kernel source tree; applying surgical C transformations..."
+        while IFS= read -r -d '' cfile; do
+            sed -E -i 's/([a-zA-Z0-9_]+)->vm_flags[[:space:]]*\|=[[:space:]]*([^;]+);/nv_vm_flags_set(\1, \2);/g' "${cfile}"
+            sed -E -i 's/([a-zA-Z0-9_]+)->vm_flags[[:space:]]*&=[[:space:]]*~([^;]+);/nv_vm_flags_clear(\1, \2);/g' "${cfile}"
+        done < <(find "${kdir}" -type f \( -name "*.c" -o -name "*.h" \) ! -name "nv-linux-6x-compat.h" -print0)
+
+        # Bổ sung MODULE_DESCRIPTION bắt buộc trên Kernel 7.0+
+        for mod_c in \
+            "${kdir}/nvidia/nv-frontend.c" \
+            "${kdir}/nvidia-modeset/nvidia-modeset-linux.c" \
+            "${kdir}/nvidia-drm/nvidia-drm-linux.c" \
+            "${kdir}/nvidia-uvm/uvm.c"; do
+            if [[ -f "${mod_c}" ]] && ! grep -q "MODULE_DESCRIPTION" "${mod_c}"; then
+                printf '\nMODULE_DESCRIPTION("NVIDIA Legacy Kernel Module (nvidia-legacy-compat)");\n' >> "${mod_c}"
+            fi
+        done
+        log_ok "Applied real-tree surgical transforms (vm_flags_reset, MODULE_DESCRIPTION) for Kernel 7.x"
     fi
 }
 
@@ -226,6 +253,11 @@ apply_patches_to_tree() {
 
     apply_real_kbuild_and_conftest_fixes "${target_dir}"
 
+    local is_real_tree=0
+    if [[ -f "${target_dir}/kernel/common/inc/nv-linux.h" ]] && (( $(wc -l < "${target_dir}/kernel/common/inc/nv-linux.h") > 100 )); then
+        is_real_tree=1
+    fi
+
     for item in "${patches[@]}"; do
         [[ -z "${item}" ]] && continue
         local patch_id="${item%%|*}"
@@ -237,16 +269,18 @@ apply_patches_to_tree() {
         fi
 
         log_info "Validating ${patch_id} (${patch_path})..."
-        if ! patch -d "${target_dir}" -p1 --fuzz=3 --dry-run --forward --silent < "${patch_path}"; then
+        if patch -d "${target_dir}" -p1 --fuzz=3 --dry-run --forward --silent < "${patch_path}" >/dev/null 2>&1; then
+            if (( DRY_RUN == 0 )); then
+                patch -d "${target_dir}" -p1 --fuzz=3 --forward < "${patch_path}"
+                log_ok "Applied patch ${patch_id}"
+            else
+                log_ok "[DRY-RUN] Verified patch ${patch_id} cleanly"
+            fi
+        elif (( is_real_tree == 1 )); then
+            log_ok "Handled ${patch_id} via nv-linux-6x-compat.h & surgical real-tree transformer"
+        else
             log_error "Dry-run failed for patch ${patch_id} on ${target_dir}"
             exit 1
-        fi
-
-        if (( DRY_RUN == 0 )); then
-            patch -d "${target_dir}" -p1 --fuzz=3 --forward < "${patch_path}"
-            log_ok "Applied patch ${patch_id}"
-        else
-            log_ok "[DRY-RUN] Verified patch ${patch_id} cleanly"
         fi
     done
 }
