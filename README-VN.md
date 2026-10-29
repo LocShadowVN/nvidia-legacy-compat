@@ -5,7 +5,7 @@
 [![Wayland Support](https://img.shields.io/badge/Wayland-GBM%20%2B%20EGL%20Shim-orange)](#module-2-wayland-gbm--egl-interposer-shim-rust-cdylib)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](#9-giấy-phép)
 
-> 🇺🇸 **English:** **[Read the documentation in English here (README.md)](README.md)**
+> **English:** **[Read the documentation in English here (README.md)](README.md)**
 
 **`nvidia-legacy-compat`** là lớp tương thích (compatibility layer), thư viện chuyển đổi Wayland GBM/EGL và hệ thống tự động hóa DKMS chuẩn Production, được thiết kế để hồi sinh và duy trì các nhánh driver GPU NVIDIA độc quyền đã ngừng hỗ trợ (**470.xx**, **390.xx**, **340.xx**) trên các bản phân phối Linux hiện đại chạy **Linux Kernel 6.0 đến 7.3+** cùng các **Wayland Compositor** thế hệ mới (Hyprland, Sway/wlroots, KDE Plasma/KWin, GNOME/Mutter).
 
