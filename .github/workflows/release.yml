@@ -1,0 +1,67 @@
+name: Release Packaging
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    name: Build, Verify & Publish Release Archive
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install system tools (jq, shellcheck, patch, gcc)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq shellcheck patch build-essential
+
+      - name: Install Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run pre-release verification suite
+        run: |
+          chmod +x scripts/auto-patch.sh tests/test_auto_patch.sh
+          shellcheck scripts/auto-patch.sh tests/test_auto_patch.sh
+          ./tests/test_auto_patch.sh
+          cd gbm-shim && cargo test --release
+
+      - name: Build production GBM & EGL Shim (libgbm.so.1)
+        working-directory: gbm-shim
+        run: |
+          cargo build --release
+          readelf -d target/release/libgbm.so | grep "libgbm.so.1"
+          nm -D target/release/libgbm.so | grep "gbm_create_device"
+          nm -D target/release/libgbm.so | grep "eglGetPlatformDisplay"
+
+      - name: Package Release Tarball & SHA-256 Checksum
+        run: |
+          VERSION="${GITHUB_REF_NAME}"
+          PKG_DIR="nvidia-legacy-compat-${VERSION}-x86_64"
+
+          mkdir -p "${PKG_DIR}/lib" "${PKG_DIR}/scripts"
+          cp gbm-shim/target/release/libgbm.so "${PKG_DIR}/lib/libgbm.so.1"
+          ln -s libgbm.so.1 "${PKG_DIR}/lib/libgbm.so"
+
+          cp -r patches kernel-compat "${PKG_DIR}/"
+          cp scripts/auto-patch.sh "${PKG_DIR}/scripts/"
+          chmod +x "${PKG_DIR}/scripts/auto-patch.sh"
+          cp README.md README-VN.md "${PKG_DIR}/"
+
+          tar -czvf "${PKG_DIR}.tar.gz" "${PKG_DIR}"
+          sha256sum "${PKG_DIR}.tar.gz" > "${PKG_DIR}.tar.gz.sha256"
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            nvidia-legacy-compat-${{ github.ref_name }}-x86_64.tar.gz
+            nvidia-legacy-compat-${{ github.ref_name }}-x86_64.tar.gz.sha256
+          generate_release_notes: true
