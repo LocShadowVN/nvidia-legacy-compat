@@ -19,7 +19,7 @@
 - [4. Cấu trúc thư mục](#4-cấu-trúc-thư-mục)
 - [5. Yêu cầu hệ thống](#5-yêu-cầu-hệ-thống)
 - [6. Hướng dẫn cài đặt & Sử dụng](#6-hướng-dẫn-cài-đặt--sử-dụng)
-- [7. Khởi chạy Wayland Compositor](#7-khởi-chạy-wayland-compositor)
+- [7. Cấu hình cho Wayland Compositor](#7-cấu-hình-cho-wayland-compositor)
 - [8. Phát triển & Kiểm thử tự động](#8-phát-triển--kiểm-thử-tự-động)
 - [9. Giấy phép](#9-giấy-phép)
 
@@ -86,7 +86,6 @@ Biên dịch thành thư viện động `libgbm.so.1` xuất đầy đủ chuẩ
 
 ```text
 nvidia-legacy-compat/
-├── Makefile                                      # Hệ thống lệnh build, test, lint & install
 ├── kernel-compat/
 │   └── include/
 │       └── nv-linux-6x-compat.h                  # Header C tương thích tập trung cho Kernel 6.0 -> 7.3+
@@ -100,15 +99,14 @@ nvidia-legacy-compat/
 ├── gbm-shim/
 │   ├── Cargo.toml                                # Cấu hình crate Rust cdylib
 │   ├── build.rs                                  # Cấu hình SONAME riêng cho cdylib
+│   ├── linker.lds                                # Script định danh symbol tham chiếu
 │   └── src/
 │       ├── lib.rs                                # Các hàm C-ABI của Mesa GBM & Unit Tests
 │       ├── drm_ioctl.rs                          # Các hàm gọi DRM Dumb / GEM / PRIME UAPI
 │       ├── sync.rs                               # Bộ đồng bộ hóa DMA-BUF sync_file & fence polling
 │       └── egl_shim.rs                           # Cầu nối EGL_PLATFORM_GBM_KHR -> DEVICE_EXT
 ├── scripts/
-│   ├── auto-patch.sh                             # Công cụ tự động giải nén, vá lỗi & cài đặt DKMS
-│   ├── nvidia-legacy-wayland-launch.sh           # Script bọc khởi chạy Wayland Compositor
-│   └── diag-check.sh                             # Công cụ chẩn đoán phần cứng, KMS & bảng symbol
+│   └── auto-patch.sh                             # Công cụ tự động giải nén, vá lỗi & cài đặt DKMS
 ├── tests/
 │   └── test_auto_patch.sh                        # Bộ kiểm thử tích hợp đa Kernel (6.4, 6.12, 7.3)
 └── .github/workflows/
@@ -138,19 +136,13 @@ sudo pacman -S --needed base-devel dkms linux-headers jq patch rust
 
 ## 6. Hướng dẫn cài đặt & Sử dụng
 
-### Bước 1: Biên dịch và cài đặt GBM/EGL Shim cùng bộ công cụ
+### Bước 1: Vá mã nguồn và cài đặt Driver `.run` qua DKMS
+
+Tải gói cài đặt `.run` chính thức từ NVIDIA (ví dụ `NVIDIA-Linux-x86_64-470.256.02.run`), sau đó chạy `scripts/auto-patch.sh`:
 
 ```bash
-make build
-sudo make install
-```
-Lệnh trên sẽ cài đặt `libgbm.so.1` vào `/usr/local/lib/nvidia-legacy-gbm/` (giữ nguyên thư viện Mesa gốc của hệ điều hành) và cài đặt các lệnh `nvidia-legacy-patch`, `nvidia-legacy-wayland-launch`, `nvidia-legacy-diag` vào `/usr/local/bin/`.
+chmod +x scripts/auto-patch.sh
 
-### Bước 2: Vá mã nguồn và cài đặt Driver `.run` qua DKMS
-
-Tải gói cài đặt `.run` chính thức từ NVIDIA (ví dụ `NVIDIA-Linux-x86_64-470.256.02.run`), sau đó thực thi:
-
-```bash
 # Tùy chọn: Kiểm tra trước ở chế độ dry-run
 ./scripts/auto-patch.sh \
   --driver-version 470.256.02 \
@@ -163,27 +155,35 @@ sudo ./scripts/auto-patch.sh \
   --run-file ./NVIDIA-Linux-x86_64-470.256.02.run
 ```
 
----
-
-## 7. Khởi chạy Wayland Compositor
-
-Sau khi khởi động lại máy với `nvidia-drm.modeset=1`, hãy chạy công cụ chẩn đoán để kiểm tra trạng thái sẵn sàng:
+### Bước 2: Biên dịch và cài đặt Wayland GBM & EGL Shim (`libgbm.so.1`)
 
 ```bash
-./scripts/diag-check.sh
+cd gbm-shim
+cargo build --release
+
+sudo install -Dm755 target/release/libgbm.so /usr/local/lib/nvidia-legacy-gbm/libgbm.so.1
+sudo ln -sf libgbm.so.1 /usr/local/lib/nvidia-legacy-gbm/libgbm.so
 ```
 
-Sử dụng script khởi chạy để nạp thư viện GBM & EGL Shim của dự án cho Wayland Compositor:
+---
+
+## 7. Cấu hình cho Wayland Compositor
+
+Để khởi chạy Wayland Compositor sử dụng thư viện `nvidia-legacy-gbm` mà không cần ghi đè lên gói Mesa mặc định của hệ điều hành, hãy khai báo các biến môi trường sau trước khi khởi chạy Compositor:
 
 ```bash
-# Khởi chạy Hyprland
-./scripts/nvidia-legacy-wayland-launch.sh Hyprland
+export LD_LIBRARY_PATH="/usr/local/lib/nvidia-legacy-gbm:${LD_LIBRARY_PATH:-}"
+export LD_PRELOAD="/usr/local/lib/nvidia-legacy-gbm/libgbm.so.1"
+export GBM_BACKEND="nvidia-legacy-drm-gbm"
+export __GLX_VENDOR_LIBRARY_NAME="nvidia"
+export WLR_NO_HARDWARE_CURSORS=1
+export KWIN_DRM_USE_MODIFIERS=0
+```
 
-# Khởi chạy Sway
-./scripts/nvidia-legacy-wayland-launch.sh sway --unsupported-gpu
-
-# Khởi chạy KDE Plasma Wayland
-./scripts/nvidia-legacy-wayland-launch.sh startplasma-wayland
+Sau khi khởi động lại máy, kiểm tra trạng thái DRM KMS:
+```bash
+sudo cat /sys/module/nvidia_drm/parameters/modeset
+# Kết quả mong đợi: Y
 ```
 
 ---
@@ -193,11 +193,15 @@ Sử dụng script khởi chạy để nạp thư viện GBM & EGL Shim của d�
 Chạy toàn bộ các bài kiểm thử tại máy local:
 
 ```bash
-# Chạy kiểm thử áp patch đa Kernel (6.4, 6.12, 7.3) và Unit Test của Rust
-make test
+# 1. Kiểm tra ShellCheck và chạy bộ test áp patch đa Kernel (6.4, 6.12, 7.3)
+shellcheck scripts/auto-patch.sh tests/test_auto_patch.sh
+chmod +x scripts/auto-patch.sh tests/test_auto_patch.sh
+./tests/test_auto_patch.sh
 
-# Chạy kiểm tra ShellCheck, định dạng rustfmt và Clippy
-make lint
+# 2. Chạy Clippy và Unit Test cho Rust GBM C-ABI, Fence Sync & EGL Interposer
+cd gbm-shim
+cargo clippy --all-targets -- -D warnings
+cargo test -- --nocapture
 ```
 
 Hệ thống GitHub Actions CI (`.github/workflows/ci.yml`) tự động kiểm chứng:
