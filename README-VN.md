@@ -1,9 +1,9 @@
 # nvidia-legacy-compat
 
-[![CI Status](https://img.shields.io/badge/CI-Passing-brightgreen)](#8-phát-triển--kiểm-thử-tự-động)
+[![CI Status](https://img.shields.io/badge/CI-Passing-brightgreen)](#9-phát-triển--kiểm-thử-tự-động)
 [![Kernel Compatibility](https://img.shields.io/badge/Linux%20Kernel-6.0%20--%207.3%2B-blue)](#2-kiến-trúc-hệ-thống)
 [![Wayland Support](https://img.shields.io/badge/Wayland-GBM%20%2B%20EGL%20Shim-orange)](#module-2-wayland-gbm--egl-interposer-shim-rust-cdylib)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](#9-giấy-phép)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](#10-giấy-phép)
 
 > **English:** **[Read the documentation in English here (README.md)](README.md)**
 
@@ -16,12 +16,13 @@
 - [1. Bài toán thực tế & Mục tiêu kỹ thuật](#1-bài-toán-thực-tế--mục-tiêu-kỹ-thuật)
 - [2. Kiến trúc hệ thống](#2-kiến-trúc-hệ-thống)
 - [3. Ma trận hỗ trợ Phần cứng & Kernel](#3-ma-trận-hỗ-trợ-phần-cứng--kernel)
-- [4. Cấu trúc thư mục](#4-cấu-trúc-thư-mục)
-- [5. Yêu cầu hệ thống](#5-yêu-cầu-hệ-thống)
-- [6. Hướng dẫn cài đặt & Sử dụng](#6-hướng-dẫn-cài-đặt--sử-dụng)
-- [7. Cấu hình cho Wayland Compositor](#7-cấu-hình-cho-wayland-compositor)
-- [8. Phát triển & Kiểm thử tự động](#8-phát-triển--kiểm-thử-tự-động)
-- [9. Giấy phép](#9-giấy-phép)
+- [4. Minh chứng thực tế trên Phần cứng thật](#4-minh-chứng-thực-tế-trên-phần-cứng-thật)
+- [5. Cấu trúc thư mục](#5-cấu-trúc-thư-mục)
+- [6. Yêu cầu hệ thống](#6-yêu-cầu-hệ-thống)
+- [7. Hướng dẫn cài đặt & Sử dụng](#7-hướng-dẫn-cài-đặt--sử-dụng)
+- [8. Cấu hình cho Wayland Compositor](#8-cấu-hình-cho-wayland-compositor)
+- [9. Phát triển & Kiểm thử tự động](#9-phát-triển--kiểm-thử-tự-động)
+- [10. Giấy phép](#10-giấy-phép)
 
 ---
 
@@ -39,12 +40,13 @@ Các dòng card đồ họa NVIDIA kiến trúc **Kepler**, **Fermi** và **Tesl
 ## 2. Kiến trúc hệ thống
 
 ### Module 1: Lớp tương thích Kernel 6.0 $\rightarrow$ 7.3+ (C / Kbuild)
-Kết hợp các bản vá mã nguồn với header tương thích tập trung (`kernel-compat/include/nv-linux-6x-compat.h`) được nạp tự động qua `Kbuild`:
+Kết hợp các bản vá mã nguồn với header tương thích tập trung (`kernel-compat/include/nv-linux-6x-compat.h`):
 - **Linux 6.3 – 6.14:** Thay thế thao tác ghi trực tiếp vào `vma->vm_flags` bằng `vm_flags_set()` và `vm_flags_clear()`.
 - **Linux 6.5+:** Chuyển đổi chữ ký hàm `get_user_pages()`, `pin_user_pages()` và `get_user_pages_remote()` sau khi Kernel loại bỏ tham số `vmas`.
 - **Linux 6.8+:** Bổ sung định nghĩa tương thích cho cờ `DRM_UNLOCKED` đã bị gỡ bỏ.
 - **Linux 6.10 – 6.11:** Thay thế hàm `follow_pfn()` bị xóa bằng `follow_pte()`, `ptep_get()` và `pte_unmap_unlock()`.
 - **Linux 6.12+:** Chuyển sang sử dụng `follow_pfnmap_start()` / `follow_pfnmap_end()` và bọc điều kiện cho `.output_poll_changed` trong `drm_mode_config_funcs`.
+- **Linux 6.13+:** Sử dụng đường dẫn tuyệt đối (`$(abspath $<)`) cho symlink đối tượng trong `nvidia.Kbuild` và `nvidia-modeset.Kbuild`.
 - **Linux 6.14+:** Ẩn trường `.date` đã bị loại bỏ khỏi `struct drm_driver`.
 - **Linux 6.15+:**
   - Chuyển thao tác sửa cờ VMA sang `vm_flags_reset()` nhằm tránh gọi vào symbol GPL-only `__vma_start_write` (phát sinh khi Kernel tách hàm `vma_start_write()`).
@@ -76,13 +78,29 @@ Biên dịch thành thư viện động `libgbm.so.1` xuất đầy đủ chuẩ
 
 | Nhánh Driver | Kiến trúc GPU mục tiêu | Dải Kernel hỗ trợ | Xuất DRM PRIME | Wayland GBM + EGL Shim |
 | :--- | :--- | :---: | :---: | :---: |
-| **470.256.02** | Kepler (GeForce GTX 600 / 700, Quadro K-series) | `6.0.0` – `7.3+` | Hỗ trợ | Hỗ trợ đầy đủ |
+| **470.256.02** | Kepler (GeForce GTX 600 / 700, GeForce 920M, Quadro K) | `6.0.0` – `7.3+` | Hỗ trợ | Hỗ trợ đầy đủ |
 | **390.157** | Fermi (GeForce GTX 400 / 500 series) | `6.0.0` – `7.3+` | Hỗ trợ | Hỗ trợ đầy đủ |
 | **340.108** | Tesla (GeForce 8000 / 9000 / 200 / 300) | `6.0.0` – `7.3+` | Legacy KMS | X11 / Legacy KMS |
 
 ---
 
-## 4. Cấu trúc thư mục
+## 4. Minh chứng thực tế trên Phần cứng thật
+
+Đã kiểm thử và xác nhận hoạt động thực tế trên phần cứng kiến trúc Kepler chạy **Linux Kernel 7.0 (`7.0.0-38-generic`)**:
+
+- **Thiết bị thử nghiệm:** Lenovo Yoga 500-14IHW (Hybrid MUXless Optimus)
+- **GPU rời:** NVIDIA Corporation `GK208BM` [GeForce 920M] (`10de:1299`, rev a1)
+- **GPU tích hợp:** Intel Corporation Haswell-ULT Integrated Graphics (`8086:0a16`, `i915`)
+- **Phiên bản Driver:** `470.256.02`
+- **Phiên bản Kernel:** `7.0.0-38-generic` (x86_64)
+- **Trạng thái xác nhận:** `Kernel driver in use: nvidia` (`nvidia_drm`, `nvidia`) cùng `nvidia_drm.modeset = Y`
+
+<img width="798" height="299" alt="Chụp màn hình từ 2026-10-30 09-31-40" src="https://github.com/user-attachments/assets/64cfceed-bedd-46c8-b8a2-a786463b9a18" />
+
+
+---
+
+## 5. Cấu trúc thư mục
 
 ```text
 nvidia-legacy-compat/
@@ -116,7 +134,7 @@ nvidia-legacy-compat/
 
 ---
 
-## 5. Yêu cầu hệ thống
+## 6. Yêu cầu hệ thống
 
 - **Gói công cụ hệ thống:** `bash`, `jq`, `patch`, `sed`, `dkms`, `make`, `gcc`, `linux-headers-$(uname -r)`
 - **Trình biên dịch Rust:** `cargo` và `rustc` (phiên bản 1.77+ stable)
@@ -134,9 +152,19 @@ sudo pacman -S --needed base-devel dkms linux-headers jq patch rust
 
 ---
 
-## 6. Hướng dẫn cài đặt & Sử dụng
+## 7. Hướng dẫn cài đặt & Sử dụng
 
-### Bước 1: Vá mã nguồn và cài đặt Driver `.run` qua DKMS
+### Bước 1: Biên dịch và cài đặt Wayland GBM & EGL Shim (`libgbm.so.1`)
+
+```bash
+cd gbm-shim
+cargo build --release
+
+sudo install -Dm755 target/release/libgbm.so /usr/local/lib/nvidia-legacy-gbm/libgbm.so.1
+sudo ln -sf libgbm.so.1 /usr/local/lib/nvidia-legacy-gbm/libgbm.so
+```
+
+### Bước 2: Vá mã nguồn và cài đặt Driver `.run` qua DKMS
 
 Tải gói cài đặt `.run` chính thức từ NVIDIA (ví dụ `NVIDIA-Linux-x86_64-470.256.02.run`), sau đó chạy `scripts/auto-patch.sh`:
 
@@ -155,19 +183,9 @@ sudo ./scripts/auto-patch.sh \
   --run-file ./NVIDIA-Linux-x86_64-470.256.02.run
 ```
 
-### Bước 2: Biên dịch và cài đặt Wayland GBM & EGL Shim (`libgbm.so.1`)
-
-```bash
-cd gbm-shim
-cargo build --release
-
-sudo install -Dm755 target/release/libgbm.so /usr/local/lib/nvidia-legacy-gbm/libgbm.so.1
-sudo ln -sf libgbm.so.1 /usr/local/lib/nvidia-legacy-gbm/libgbm.so
-```
-
 ---
 
-## 7. Cấu hình cho Wayland Compositor
+## 8. Cấu hình cho Wayland Compositor
 
 Để khởi chạy Wayland Compositor sử dụng thư viện `nvidia-legacy-gbm` mà không cần ghi đè lên gói Mesa mặc định của hệ điều hành, hãy khai báo các biến môi trường sau trước khi khởi chạy Compositor:
 
@@ -188,7 +206,7 @@ sudo cat /sys/module/nvidia_drm/parameters/modeset
 
 ---
 
-## 8. Phát triển & Kiểm thử tự động
+## 9. Phát triển & Kiểm thử tự động
 
 Chạy toàn bộ các bài kiểm thử tại máy local:
 
@@ -212,6 +230,6 @@ Hệ thống GitHub Actions CI (`.github/workflows/ci.yml`) tự động kiểm 
 
 ---
 
-## 9. Giấy phép
+## 10. Giấy phép
 
 Dự án được phát hành dưới giấy phép **MIT License**. Các gói cài đặt driver NVIDIA gốc do người dùng tải về vẫn tuân theo thỏa thuận cấp phép phần mềm chính thức của NVIDIA (NVIDIA Software License Agreement).
