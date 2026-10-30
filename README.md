@@ -1,9 +1,9 @@
 # nvidia-legacy-compat
 
-[![CI Status](https://img.shields.io/badge/CI-Passing-brightgreen)](#8-development--automated-verification)
+[![CI Status](https://img.shields.io/badge/CI-Passing-brightgreen)](#9-development--automated-verification)
 [![Kernel Compatibility](https://img.shields.io/badge/Linux%20Kernel-6.0%20--%207.3%2B-blue)](#2-system-architecture)
 [![Wayland Support](https://img.shields.io/badge/Wayland-GBM%20%2B%20EGL%20Shim-orange)](#module-2-wayland-gbm--egl-interposer-shim-rust-cdylib)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](#9-license)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](#10-license)
 
 > **Tiếng Việt:** **[Đọc tài liệu bằng Tiếng Việt tại đây (README-VN.md)](README-VN.md)**
 
@@ -16,12 +16,13 @@
 - [1. Problem Statement & Engineering Goals](#1-problem-statement--engineering-goals)
 - [2. System Architecture](#2-system-architecture)
 - [3. Hardware & Kernel Compatibility Matrix](#3-hardware--kernel-compatibility-matrix)
-- [4. Repository Layout](#4-repository-layout)
-- [5. Prerequisites](#5-prerequisites)
-- [6. Installation & Usage](#6-installation--usage)
-- [7. Wayland Compositor Configuration](#7-wayland-compositor-configuration)
-- [8. Development & Automated Verification](#8-development--automated-verification)
-- [9. License](#9-license)
+- [4. Real Hardware Verification](#4-real-hardware-verification)
+- [5. Repository Layout](#5-repository-layout)
+- [6. Prerequisites](#6-prerequisites)
+- [7. Installation & Usage](#7-installation--usage)
+- [8. Wayland Compositor Configuration](#8-wayland-compositor-configuration)
+- [9. Development & Automated Verification](#9-development--automated-verification)
+- [10. License](#10-license)
 
 ---
 
@@ -39,12 +40,13 @@ Legacy NVIDIA GPUs based on the **Kepler**, **Fermi**, and **Tesla** architectur
 ## 2. System Architecture
 
 ### Module 1: Kernel 6.0 $\rightarrow$ 7.3+ Compatibility Layer (C / Kbuild)
-Combines source patches with a unified compatibility header (`kernel-compat/include/nv-linux-6x-compat.h`) force-included via Kbuild:
+Combines source patches with a unified compatibility header (`kernel-compat/include/nv-linux-6x-compat.h`):
 - **Linux 6.3 – 6.14:** Replaces direct `vma->vm_flags` bitmask mutations with `vm_flags_set()` and `vm_flags_clear()`.
 - **Linux 6.5+:** Adapts `get_user_pages()`, `pin_user_pages()`, and `get_user_pages_remote()` to the 4-argument/6-argument signatures following `vmas` parameter removal.
 - **Linux 6.8+:** Provides compatibility definitions for removed `DRM_UNLOCKED` ioctl flags.
 - **Linux 6.10 – 6.11:** Replaces removed `follow_pfn()` with `follow_pte()`, `ptep_get()`, and `pte_unmap_unlock()`.
 - **Linux 6.12+:** Transitions PFN lookups to `follow_pfnmap_start()` / `follow_pfnmap_end()` and guards removed `.output_poll_changed` callbacks in `drm_mode_config_funcs`.
+- **Linux 6.13+:** Uses absolute paths (`$(abspath $<)`) for Kbuild object symlinks in `nvidia.Kbuild` and `nvidia-modeset.Kbuild`.
 - **Linux 6.14+:** Guards removed `.date` field in `struct drm_driver`.
 - **Linux 6.15+:**
   - Switches VMA flag mutations to `vm_flags_reset()` to bypass the GPL-only `__vma_start_write` symbol introduced when `vma_start_write()` was uninlined.
@@ -76,13 +78,28 @@ Compiles into a drop-in shared library (`libgbm.so.1`) exporting both the standa
 
 | Driver Series | GPU Architecture | Supported Kernel Range | DRM PRIME Export | Wayland GBM + EGL Shim |
 | :--- | :--- | :---: | :---: | :---: |
-| **470.256.02** | Kepler (GeForce GTX 600 / 700, Quadro K-series) | `6.0.0` – `7.3+` | Supported | Full Support |
+| **470.256.02** | Kepler (GeForce GTX 600 / 700, GeForce 920M, Quadro K) | `6.0.0` – `7.3+` | Supported | Full Support |
 | **390.157** | Fermi (GeForce GTX 400 / 500 series) | `6.0.0` – `7.3+` | Supported | Full Support |
 | **340.108** | Tesla (GeForce 8000 / 9000 / 200 / 300) | `6.0.0` – `7.3+` | Legacy KMS | X11 / Legacy KMS |
 
 ---
 
-## 4. Repository Layout
+## 4. Real Hardware Verification
+
+Verified on physical Kepler hardware running **Linux Kernel 7.0 (`7.0.0-38-generic`)**:
+
+- **Test Machine:** Lenovo Yoga 500-14IHW (Hybrid MUXless Optimus)
+- **Discrete GPU:** NVIDIA Corporation `GK208BM` [GeForce 920M] (`10de:1299`, rev a1)
+- **Integrated GPU:** Intel Corporation Haswell-ULT Integrated Graphics (`8086:0a16`, `i915`)
+- **Driver Branch:** `470.256.02`
+- **Kernel Version:** `7.0.0-38-generic` (x86_64)
+- **Verified State:** `Kernel driver in use: nvidia` (`nvidia_drm`, `nvidia`) with `nvidia_drm.modeset = Y`
+
+<img width="798" height="299" alt="Chụp màn hình từ 2026-10-30 09-31-40" src="https://github.com/user-attachments/assets/b365376e-df63-4085-a6b2-52fec1a9c547" />
+
+---
+
+## 5. Repository Layout
 
 ```text
 nvidia-legacy-compat/
@@ -116,7 +133,7 @@ nvidia-legacy-compat/
 
 ---
 
-## 5. Prerequisites
+## 6. Prerequisites
 
 - **System Packages:** `bash`, `jq`, `patch`, `sed`, `dkms`, `make`, `gcc`, `linux-headers-$(uname -r)`
 - **Rust Toolchain:** `cargo` and `rustc` (1.77+ stable)
@@ -134,9 +151,19 @@ sudo pacman -S --needed base-devel dkms linux-headers jq patch rust
 
 ---
 
-## 6. Installation & Usage
+## 7. Installation & Usage
 
-### Step 1: Patch and Install the NVIDIA `.run` Driver via DKMS
+### Step 1: Build and Install the Wayland GBM & EGL Shim (`libgbm.so.1`)
+
+```bash
+cd gbm-shim
+cargo build --release
+
+sudo install -Dm755 target/release/libgbm.so /usr/local/lib/nvidia-legacy-gbm/libgbm.so.1
+sudo ln -sf libgbm.so.1 /usr/local/lib/nvidia-legacy-gbm/libgbm.so
+```
+
+### Step 2: Patch and Install the NVIDIA `.run` Driver via DKMS
 
 Download the official NVIDIA `.run` installer (e.g., `NVIDIA-Linux-x86_64-470.256.02.run`), then execute `scripts/auto-patch.sh`:
 
@@ -155,19 +182,9 @@ sudo ./scripts/auto-patch.sh \
   --run-file ./NVIDIA-Linux-x86_64-470.256.02.run
 ```
 
-### Step 2: Build and Install the Wayland GBM & EGL Shim (`libgbm.so.1`)
-
-```bash
-cd gbm-shim
-cargo build --release
-
-sudo install -Dm755 target/release/libgbm.so /usr/local/lib/nvidia-legacy-gbm/libgbm.so.1
-sudo ln -sf libgbm.so.1 /usr/local/lib/nvidia-legacy-gbm/libgbm.so
-```
-
 ---
 
-## 7. Wayland Compositor Configuration
+## 8. Wayland Compositor Configuration
 
 To run your Wayland compositor using the `nvidia-legacy-gbm` shim without overwriting your distribution's default Mesa packages, export the following environment variables before starting the compositor:
 
@@ -188,7 +205,7 @@ sudo cat /sys/module/nvidia_drm/parameters/modeset
 
 ---
 
-## 8. Development & Automated Verification
+## 9. Development & Automated Verification
 
 Run the automated test suites locally:
 
@@ -212,6 +229,6 @@ Our GitHub Actions CI pipeline (`.github/workflows/ci.yml`) automatically verifi
 
 ---
 
-## 9. License
+## 10. License
 
 Released under the **MIT License**. Proprietary NVIDIA installer archives downloaded by the user remain governed by the official NVIDIA Software License Agreement.
