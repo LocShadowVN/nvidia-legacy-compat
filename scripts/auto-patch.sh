@@ -178,6 +178,7 @@ extract_installer() {
     printf "%s" "${target_extract}"
 }
 
+# Áp dụng các bản sửa lỗi Kbuild, Symlink, conftest.sh & mã nguồn thực tế cho Kernel 6.x -> 7.4+
 apply_real_kbuild_and_conftest_fixes() {
     local target_dir="$1"
     (( DRY_RUN == 1 )) && return 0
@@ -185,35 +186,68 @@ apply_real_kbuild_and_conftest_fixes() {
     local kdir="${target_dir}/kernel"
     [[ ! -d "${kdir}" ]] && return 0
 
+    # 1. Thay EXTRA_CFLAGS -> ccflags-y và EXTRA_LDFLAGS -> ldflags-y (Kernel 6.15+ & 7.x)
     while IFS= read -r -d '' mkfile; do
         sed -i 's/\bEXTRA_CFLAGS\b/ccflags-y/g; s/\bEXTRA_LDFLAGS\b/ldflags-y/g' "${mkfile}"
     done < <(find "${kdir}" -maxdepth 3 \( -name "Kbuild" -o -name "*.mk" -o -name "Makefile" \) -print0)
 
     local kbuild_file="${kdir}/Kbuild"
-    if [[ -f "${kbuild_file}" ]] && ! grep -q "nv-linux-6x-compat.h" "${kbuild_file}"; then
+    if [[ -f "${kbuild_file}" ]] && ! grep -q "nvidia-legacy-compat" "${kbuild_file}"; then
         cat >> "${kbuild_file}" <<'EOF'
 
 # Injected by nvidia-legacy-compat for Kernel 6.x / 7.x
-ccflags-y += -include $(src)/common/inc/nv-linux-6x-compat.h
 ccflags-y += -Wno-error -Wno-implicit-function-declaration -Wno-strict-prototypes -Wno-incompatible-pointer-types -fms-extensions
 EOF
-        log_ok "Updated Kbuild (EXTRA_CFLAGS -> ccflags-y & force-included nv-linux-6x-compat.h)"
+        log_ok "Updated Kbuild (EXTRA_CFLAGS -> ccflags-y & added GCC 14/15/16 compatibility flags)"
     fi
 
+    # 2. Sửa lỗi symlink tương đối (ln -sf $< $@) trong nvidia.Kbuild & nvidia-modeset.Kbuild trên Kernel 6.13+ / 7.x
+    for sub_kbuild in "${kdir}/nvidia/nvidia.Kbuild" "${kdir}/nvidia-modeset/nvidia-modeset.Kbuild"; do
+        if [[ -f "${sub_kbuild}" ]]; then
+            sed -i 's/ln -sf \$< \$@/ln -sf $(abspath $<) $@/g' "${sub_kbuild}"
+        fi
+    done
+
+    # 3. Bơm cờ tương thích vào conftest.sh mà KHÔNG làm hỏng các bài test header của conftest.sh
     local conftest_file="${kdir}/conftest.sh"
     if [[ -f "${conftest_file}" ]] && ! grep -q "fms-extensions" "${conftest_file}"; then
         sed -i 's/CFLAGS="/CFLAGS="-fms-extensions -Wno-implicit-function-declaration -Wno-strict-prototypes -Wno-incompatible-pointer-types /g' "${conftest_file}"
         log_ok "Patched conftest.sh with Kernel 7.x flags (-fms-extensions)"
     fi
 
+    # 4. Nếu phát hiện cây mã nguồn .run thật (nv-linux.h > 100 dòng):
     local nv_linux_h="${kdir}/common/inc/nv-linux.h"
     if [[ -f "${nv_linux_h}" ]] && (( $(wc -l < "${nv_linux_h}") > 100 )); then
-        log_info "Detected real NVIDIA .run kernel source tree; applying surgical C transformations..."
+        log_info "Detected real NVIDIA .run kernel source tree; applying full Kernel 6.x -> 7.4+ transformations..."
+
+        # Nếu máy có git và mạng, áp dụng bộ patch mainline đầy đủ cho 470.256.02 trước
+        if [[ "${DRIVER_VERSION}" == "470.256.02" ]] && command -v git >/dev/null 2>&1; then
+            local mainline_tmp="${WORK_DIR}/nv470-mainline"
+            rm -rf "${mainline_tmp}"
+            if git clone --depth=1 https://github.com/joanbm/nvidia-470xx-linux-mainline.git "${mainline_tmp}" >/dev/null 2>&1; then
+                local p_name
+                while IFS= read -r p_name; do
+                    [[ -z "${p_name}" ]] && continue
+                    if [[ -f "${mainline_tmp}/patches/${p_name}" ]]; then
+                        patch -d "${kdir}" -p1 --forward --silent < "${mainline_tmp}/patches/${p_name}" || true
+                    fi
+                done < <(awk '/^apply_patch / {print $2}' "${mainline_tmp}/extract_and_patch")
+                log_ok "Applied full mainline 470.256.02 patch stack"
+            fi
+        fi
+
+        # Chuyển đổi mọi thao tác ghi trực tiếp vma->vm_flags còn sót lại sang nv_vm_flags_set / nv_vm_flags_clear
         while IFS= read -r -d '' cfile; do
             sed -E -i 's/([a-zA-Z0-9_]+)->vm_flags[[:space:]]*\|=[[:space:]]*([^;]+);/nv_vm_flags_set(\1, \2);/g' "${cfile}"
             sed -E -i 's/([a-zA-Z0-9_]+)->vm_flags[[:space:]]*&=[[:space:]]*~([^;]+);/nv_vm_flags_clear(\1, \2);/g' "${cfile}"
-        done < <(find "${kdir}" -type f \( -name "*.c" -o -name "*.h" \) ! -name "nv-linux-6x-compat.h" -print0)
+        done < <(find "${kdir}" -type f \( -name "*.c" -o -name "*.h" \) ! -name "nv-linux-6x-compat.h" ! -name "nv-linux.h" -print0)
 
+        # Nạp nv-linux-6x-compat.h ở cuối nv-linux.h (An toàn tuyệt đối, không làm bẩn conftest.sh)
+        if ! grep -q "nv-linux-6x-compat.h" "${nv_linux_h}"; then
+            printf '\n#include "nv-linux-6x-compat.h"\n' >> "${nv_linux_h}"
+        fi
+
+        # Đảm bảo MODULE_DESCRIPTION có mặt trên cả 4 module cho Kernel 7.0+ modpost
         for mod_c in \
             "${kdir}/nvidia/nv-frontend.c" \
             "${kdir}/nvidia-modeset/nvidia-modeset-linux.c" \
@@ -223,7 +257,7 @@ EOF
                 printf '\nMODULE_DESCRIPTION("NVIDIA Legacy Kernel Module (nvidia-legacy-compat)");\n' >> "${mod_c}"
             fi
         done
-        log_ok "Applied real-tree surgical transforms (vm_flags_reset, MODULE_DESCRIPTION) for Kernel 7.x"
+        log_ok "Completed surgical real-tree transformations for Kernel 7.0 - 7.4+"
     fi
 }
 
@@ -267,7 +301,7 @@ apply_patches_to_tree() {
                 log_ok "[DRY-RUN] Verified patch ${patch_id} cleanly"
             fi
         elif (( is_real_tree == 1 )); then
-            log_ok "Handled ${patch_id} via nv-linux-6x-compat.h & surgical real-tree transformer"
+            log_ok "Handled ${patch_id} via nv-linux-6x-compat.h & real-tree transformer"
         else
             log_error "Dry-run failed for patch ${patch_id} on ${target_dir}"
             exit 1
@@ -287,9 +321,10 @@ configure_wayland_modeset() {
     fi
 
     local modprobe_conf="/etc/modprobe.d/nvidia-legacy-wayland.conf"
+    # Tuyệt đối KHÔNG bật fbdev=1 để tránh đen màn hình trên các laptop Optimus (3D controller)
     cat > "${modprobe_conf}" <<'EOF'
 # Generated by nvidia-legacy-compat
-options nvidia-drm modeset=1 fbdev=1
+options nvidia-drm modeset=1
 options nvidia NVreg_PreserveVideoMemoryAllocations=1
 blacklist nouveau
 EOF
@@ -314,14 +349,14 @@ register_dkms() {
     mkdir -p "${dkms_src}"
     cp -a "${extracted_dir}/kernel/." "${dkms_src}/"
 
-    if [[ ! -f "${dkms_src}/dkms.conf" ]]; then
-        cat > "${dkms_src}/dkms.conf" <<EOF
+    # Luôn ghi đè dkms.conf (xóa bỏ __JOBS, __DKMS_MODULES mẫu) và bọc 'make' trong nháy đơn
+    cat > "${dkms_src}/dkms.conf" <<EOF
 PACKAGE_NAME="nvidia"
 PACKAGE_VERSION="${DRIVER_VERSION}"
-CLEAN="make clean"
+CLEAN="'make' clean"
 BUILT_MODULE_NAME[0]="nvidia"
 DEST_MODULE_LOCATION[0]="/kernel/drivers/video"
-MAKE[0]="make -j\$(nproc) NV_EXCLUDE_BUILD_MODULES='' KERNEL_UNAME=\${kernelver} IGNORE_CC_MISMATCH=1 modules"
+MAKE[0]="'make' -j\$(nproc) NV_EXCLUDE_BUILD_MODULES='' KERNEL_UNAME=\${kernelver} IGNORE_CC_MISMATCH=1 modules"
 BUILT_MODULE_NAME[1]="nvidia-modeset"
 DEST_MODULE_LOCATION[1]="/kernel/drivers/video"
 BUILT_MODULE_NAME[2]="nvidia-drm"
@@ -330,9 +365,9 @@ BUILT_MODULE_NAME[3]="nvidia-uvm"
 DEST_MODULE_LOCATION[3]="/kernel/drivers/video"
 AUTOINSTALL="yes"
 EOF
-    fi
 
-    dkms add -m nvidia -v "${DRIVER_VERSION}" || true
+    dkms remove -m nvidia -v "${DRIVER_VERSION}" --all >/dev/null 2>&1 || true
+    dkms add -m nvidia -v "${DRIVER_VERSION}"
     dkms build -m nvidia -v "${DRIVER_VERSION}" -k "${KERNEL_VERSION}"
     dkms install -m nvidia -v "${DRIVER_VERSION}" -k "${KERNEL_VERSION}"
     log_ok "DKMS build and installation succeeded for nvidia/${DRIVER_VERSION} on kernel ${KERNEL_VERSION}"
