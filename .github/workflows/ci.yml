@@ -36,20 +36,20 @@ jobs:
           done
           echo "[OK] All patch files in patch-matrix.json exist and are non-empty."
 
-      - name: Execute automated patch & semver test suite (6.4 -> 6.12 -> 7.3)
+      - name: Execute automated patch & semver test suite (6.4 -> 6.12 -> 7.3 -> 7.4)
         run: |
           chmod +x scripts/*.sh tests/*.sh
           ./tests/test_auto_patch.sh
 
-      - name: Compile-test nv-linux-6x-compat.h with GCC across 8 Kernel versions (6.1 -> 7.3)
+      - name: Compile-test nv-linux-6x-compat.h with GCC across 9 Kernel versions (6.1 -> 7.4)
         run: |
           MOCK_INC="$(mktemp -d)"
-          mkdir -p "${MOCK_INC}/linux" "${MOCK_INC}/linux/sched" "${MOCK_INC}/drm"
+          mkdir -p "${MOCK_INC}/linux" "${MOCK_INC}/linux/sched"
 
           cat > "${MOCK_INC}/linux/version.h" << 'EOF'
           #define KERNEL_VERSION(a,b,c) (((a) << 16) + ((b) << 8) + ((c) > 255 ? 255 : (c)))
           #ifndef LINUX_VERSION_CODE
-          #define LINUX_VERSION_CODE KERNEL_VERSION(7, 3, 0)
+          #define LINUX_VERSION_CODE KERNEL_VERSION(7, 4, 0)
           #endif
           EOF
 
@@ -102,11 +102,7 @@ jobs:
           #endif
           EOF
 
-          touch "${MOCK_INC}/linux/sched/mm.h" \
-                "${MOCK_INC}/drm/drm_drv.h" \
-                "${MOCK_INC}/drm/drm_ioctl.h" \
-                "${MOCK_INC}/drm/drm_prime.h" \
-                "${MOCK_INC}/drm/drm_fb_helper.h"
+          touch "${MOCK_INC}/linux/sched/mm.h"
 
           cat > "${MOCK_INC}/linux/timer.h" << 'EOF'
           struct timer_list { int dummy; };
@@ -140,6 +136,11 @@ jobs:
           extern struct sysfb_display sysfb_primary_display;
           EOF
 
+          cat > "${MOCK_INC}/linux/uaccess.h" << 'EOF'
+          #define get_user(x, ptr) ((x) = *(ptr), 0)
+          #define put_user(x, ptr) (*(ptr) = (x), 0)
+          EOF
+
           cat > "${MOCK_INC}/test_compat.c" << 'EOF'
           #include <linux/version.h>
           #if LINUX_VERSION_CODE < KERNEL_VERSION(7, 0, 0)
@@ -161,12 +162,21 @@ jobs:
               }
               struct dma_fence fence = { 0 };
               (void)nv_dma_fence_signal(&fence);
+              #if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 4, 0)
+              int src_val = 42, dst_val = 0;
+              if (__get_user(dst_val, &src_val) != 0 || dst_val != 42) {
+                  return 1;
+              }
+              if (__put_user(99, &dst_val) != 0 || dst_val != 99) {
+                  return 1;
+              }
+              #endif
               const struct screen_info *si = nv_get_screen_info();
               return (si && si->width == 1920) ? 0 : 1;
           }
           EOF
 
-          for kv in "6,1,0" "6,4,0" "6,6,0" "6,10,0" "6,12,0" "6,15,0" "7,0,0" "7,3,0"; do
+          for kv in "6,1,0" "6,4,0" "6,6,0" "6,10,0" "6,12,0" "6,15,0" "7,0,0" "7,3,0" "7,4,0"; do
             echo "--> Compiling nv-linux-6x-compat.h against simulated Kernel (${kv})..."
             gcc -Wall -Wextra -Werror \
               -DLINUX_VERSION_CODE="KERNEL_VERSION(${kv})" \
@@ -175,7 +185,7 @@ jobs:
             "${MOCK_INC}/test_bin"
           done
           rm -rf "${MOCK_INC}"
-          echo "[PASS] nv-linux-6x-compat.h compiled and executed cleanly across all 8 Kernel versions!"
+          echo "[PASS] nv-linux-6x-compat.h compiled and executed cleanly across all 9 Kernel versions!"
 
   build-and-test-gbm-shim:
     name: Rust Wayland GBM & EGL Shim (Build, Rust Tests & C-ABI Test)
