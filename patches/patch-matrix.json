@@ -1,5 +1,5 @@
 {
-  "schema_version": "1.1.0",
+  "schema_version": "1.2.0",
   "drivers": {
     "470.256.02": {
       "architecture": "x86_64",
@@ -38,7 +38,15 @@
           "file": "470.256.02/0004-kernel-6.15-to-7.x-compat.patch",
           "min_kernel": "6.14.0",
           "max_kernel": "7.99.99",
-          "description": "Support Linux 6.14 through 7.x (vm_flags_reset GPL bypass, drm_driver.date removal, sysfb_primary_display, MODULE_DESCRIPTION)",
+          "description": "Support Linux 6.14 through 7.3 (vm_flags_reset GPL bypass, drm_driver.date removal, sysfb_primary_display, MODULE_DESCRIPTION)",
+          "required": true
+        },
+        {
+          "id": "NV470-K74-UACCESS",
+          "file": "470.256.02/0005-kernel-7.4-compat.patch",
+          "min_kernel": "7.4.0",
+          "max_kernel": "7.99.99",
+          "description": "Support Linux 7.4+ by redirecting removed __get_user and __put_user helpers to get_user and put_user",
           "required": true
         }
       ]
@@ -80,7 +88,15 @@
           "file": "470.256.02/0004-kernel-6.15-to-7.x-compat.patch",
           "min_kernel": "6.14.0",
           "max_kernel": "7.99.99",
-          "description": "Support Linux 6.14 through 7.x on 390.xx branch",
+          "description": "Support Linux 6.14 through 7.3 on 390.xx branch",
+          "required": true
+        },
+        {
+          "id": "NV390-K74-UACCESS",
+          "file": "470.256.02/0005-kernel-7.4-compat.patch",
+          "min_kernel": "7.4.0",
+          "max_kernel": "7.99.99",
+          "description": "Support Linux 7.4+ __get_user/__put_user removal on 390.xx branch",
           "required": true
         }
       ]
