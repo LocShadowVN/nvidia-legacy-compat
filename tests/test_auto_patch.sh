@@ -13,11 +13,20 @@ create_mock_nvidia_tree() {
     local dst="$1"
     mkdir -p "${dst}/kernel/common/inc" \
              "${dst}/kernel/nvidia" \
+             "${dst}/kernel/nvidia-modeset" \
              "${dst}/kernel/nvidia-drm" \
              "${dst}/kernel/nvidia-uvm"
 
     cat > "${dst}/kernel/Kbuild" <<'EOF'
 EXTRA_CFLAGS += -I$(src)/common/inc
+EOF
+
+    cat > "${dst}/kernel/nvidia/nvidia.Kbuild" <<'EOF'
+cmd_symlink = ln -sf $< $@
+EOF
+
+    cat > "${dst}/kernel/nvidia-modeset/nvidia-modeset.Kbuild" <<'EOF'
+cmd_symlink = ln -sf $< $@
 EOF
 
     cat > "${dst}/kernel/conftest.sh" <<'EOF'
@@ -128,7 +137,7 @@ grep -q "follow_pfnmap_start" "${TREE_612}/kernel/nvidia/os-mlock.c"
 grep -q "DRIVER_MODESET | DRIVER_ATOMIC" "${TREE_612}/kernel/nvidia-drm/nvidia-drm-drv.c"
 echo "[PASS] Kernel 6.12.1 patch stack test succeeded."
 
-echo "=== [TEST 3] Patching for Linux Kernel 7.3.1 (All 4 patches + Kbuild/conftest 7.x fixes) ==="
+echo "=== [TEST 3] Patching for Linux Kernel 7.3.1 (Patches 1..4 + Kbuild/conftest 7.x fixes) ==="
 TREE_73="${TEST_TMP}/tree_73"
 create_mock_nvidia_tree "${TREE_73}"
 bash "${AUTO_PATCH}" \
@@ -141,6 +150,20 @@ grep -q "vm_flags_reset(vma, vma->vm_flags | flags);" "${TREE_73}/kernel/common/
 grep -q "sysfb_primary_display.screen" "${TREE_73}/kernel/common/inc/nv-linux.h"
 grep -q "MODULE_DESCRIPTION" "${TREE_73}/kernel/nvidia-drm/nvidia-drm-drv.c"
 grep -q "ccflags-y" "${TREE_73}/kernel/Kbuild"
+grep -q "abspath" "${TREE_73}/kernel/nvidia/nvidia.Kbuild"
 grep -q "fms-extensions" "${TREE_73}/kernel/conftest.sh"
 test -f "${TREE_73}/kernel/common/inc/nv-linux-6x-compat.h"
-echo "[PASS] Kernel 7.3.1 full patch stack test succeeded."
+echo "[PASS] Kernel 7.3.1 patch stack test succeeded."
+
+echo "=== [TEST 4] Patching for Linux Kernel 7.4.0 (All 5 patches including __get_user/__put_user removal) ==="
+TREE_74="${TEST_TMP}/tree_74"
+create_mock_nvidia_tree "${TREE_74}"
+bash "${AUTO_PATCH}" \
+    --driver-version "470.256.02" \
+    --kernel-version "7.4.0-rc1" \
+    --source-dir "${TREE_74}" \
+    --skip-dkms
+
+grep -q "__get_user(x, ptr) get_user((x), (ptr))" "${TREE_74}/kernel/common/inc/nv-linux.h"
+grep -q "__put_user(x, ptr) put_user((x), (ptr))" "${TREE_74}/kernel/common/inc/nv-linux.h"
+echo "[PASS] Kernel 7.4.0 full patch stack test succeeded."
