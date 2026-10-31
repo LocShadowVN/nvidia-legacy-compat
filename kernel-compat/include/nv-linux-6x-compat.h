@@ -2,7 +2,7 @@
 /*
  * nv-linux-6x-compat.h
  * Production compatibility shim for Legacy NVIDIA Drivers (470.xx, 390.xx, 340.xx)
- * Supports Linux Kernel 6.0 through 7.x.x (7.0, 7.1, 7.2, 7.3+)
+ * Supports Linux Kernel 6.0 through 7.4+
  */
 
 #ifndef _NV_LINUX_6X_COMPAT_H_
@@ -15,21 +15,22 @@
 #include <linux/string.h>
 #include <linux/interrupt.h>
 #include <linux/dma-fence.h>
-#include <drm/drm_drv.h>
-#include <drm/drm_ioctl.h>
-#include <drm/drm_prime.h>
-#include <drm/drm_fb_helper.h>
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 0, 0)
 #include <linux/sysfb.h>
 #endif
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 4, 0)
+#include <linux/uaccess.h>
+#endif
+
 /*
- * 1. Quản lý cờ VMA:
+ * 1. Quản lý cờ VMA (Có guard chống định nghĩa trùng với nv-linux.h):
  * - Linux 6.3 -> 6.14: dùng vm_flags_set() / vm_flags_clear()
- * - Linux 6.15+ & 7.x: vm_flags_set() gọi __vma_start_write() (GPL-only).
- *   Sử dụng vm_flags_reset() trên các VMA đã giữ khóa trong mmap_region.
+ * - Linux 6.15+ & 7.x: dùng vm_flags_reset() để tránh symbol GPL-only __vma_start_write
  */
+#ifndef NV_VM_FLAGS_HELPERS_DEFINED
+#define NV_VM_FLAGS_HELPERS_DEFINED 1
 static inline void nv_vm_flags_set(struct vm_area_struct *vma, vm_flags_t flags)
 {
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 15, 0)
@@ -51,6 +52,7 @@ static inline void nv_vm_flags_clear(struct vm_area_struct *vma, vm_flags_t flag
     vma->vm_flags &= ~flags;
 #endif
 }
+#endif /* NV_VM_FLAGS_HELPERS_DEFINED */
 
 /*
  * 2. Linux 6.5+ & 7.x: Loại bỏ tham số `struct vm_area_struct **vmas`
@@ -105,6 +107,8 @@ static inline long nv_get_user_pages_remote(struct mm_struct *mm,
 /*
  * 3. Linux 6.10+ / 6.12+ / 7.x: Thay thế follow_pfn() bằng follow_pfnmap_start()
  */
+#ifndef NV_FOLLOW_PFN_HELPER_DEFINED
+#define NV_FOLLOW_PFN_HELPER_DEFINED 1
 static inline int nv_follow_pfn(struct vm_area_struct *vma,
                                 unsigned long address,
                                 unsigned long *pfn)
@@ -133,6 +137,7 @@ static inline int nv_follow_pfn(struct vm_area_struct *vma,
     return follow_pfn(vma, address, pfn);
 #endif
 }
+#endif /* NV_FOLLOW_PFN_HELPER_DEFINED */
 
 /*
  * 4. Linux 6.8+: Cờ DRM_UNLOCKED bị gỡ bỏ
@@ -142,8 +147,7 @@ static inline int nv_follow_pfn(struct vm_area_struct *vma,
 #endif
 
 /*
- * 5. Linux 6.15+ & 7.x: del_timer() / del_timer_sync() bị xóa,
- * chuyển sang timer_delete() / timer_delete_sync()
+ * 5. Linux 6.15+ & 7.x: del_timer() / del_timer_sync() chuyển sang timer_delete()
  */
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 15, 0)
 #ifndef del_timer
@@ -155,7 +159,7 @@ static inline int nv_follow_pfn(struct vm_area_struct *vma,
 #endif
 
 /*
- * 6. Linux 6.19+ & 7.x: in_irq() bị xóa, chuyển sang in_hardirq()
+ * 6. Linux 6.19+ & 7.x: in_irq() chuyển sang in_hardirq()
  */
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 19, 0)
 #ifndef in_irq
@@ -199,6 +203,19 @@ static inline char *nv_compat_strncpy(char *dest, const char *src, size_t count)
 }
 #ifndef strncpy
 #define strncpy(d, s, n) nv_compat_strncpy((d), (s), (n))
+#endif
+#endif
+
+/*
+ * 9. Linux 7.4+: Các macro không an toàn __get_user() và __put_user()
+ * bị gỡ bỏ khỏi <linux/uaccess.h>, ánh xạ sang get_user() và put_user().
+ */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 4, 0)
+#ifndef __get_user
+#define __get_user(x, ptr) get_user((x), (ptr))
+#endif
+#ifndef __put_user
+#define __put_user(x, ptr) put_user((x), (ptr))
 #endif
 #endif
 
