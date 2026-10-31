@@ -1,0 +1,17 @@
+--- a/kernel/common/inc/nv-linux.h
++++ b/kernel/common/inc/nv-linux.h
+@@ -20,5 +20,14 @@
+ }
+ #if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 0, 0)
+ #include <linux/sysfb.h>
+ #define nv_screen_info (sysfb_primary_display.screen)
+ #endif
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 4, 0)
++#include <linux/uaccess.h>
++#ifndef __get_user
++#define __get_user(x, ptr) get_user((x), (ptr))
++#endif
++#ifndef __put_user
++#define __put_user(x, ptr) put_user((x), (ptr))
++#endif
++#endif
